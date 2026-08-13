@@ -19,7 +19,7 @@
     "telegraf": "^4.14.1",
     "deepgram-sdk": "^3.1.1",
     "openrouter-ai": "^1.0.0",
-    "crew-ai": "^0.31.0",
+    "crewai": "^0.31.0",
     "@supabase/supabase-js": "^2.38.0",
     "axios": "^1.6.0",
     "dotenv": "^16.3.1",
