@@ -323,35 +323,27 @@ For more info, visit https://hustlebot.io
           // Show "typing" indicator
           await ctx.sendChatAction('typing');
 
-          // Get AI response
-          if (this.llm) {
-            logger.info('Getting AI response...');
-            const response = await this.llm.complete(text, {
-              taskType: 'general',
-              maxTokens: 1000
-            });
+          // For now, just echo back the transcription
+          logger.info('Sending transcription back...');
+          await ctx.reply(`🎤 You said: "${text}"\n\n(Full AI response coming soon...)`);
 
-            logger.info(`✅ AI response ready: ${response.tokens.output} tokens`);
+          // Try to get AI response (but don't fail if it doesn't work)
+          try {
+            if (this.llm) {
+              logger.info('Getting AI response...');
+              const response = await this.llm.complete(text, {
+                taskType: 'general',
+                maxTokens: 500
+              });
 
-            // Send as text first
-            await ctx.reply(`🎤 You said: "${text}"\n\n${response.content}`);
-
-            // Optionally send voice reply
-            try {
-              logger.info('Generating voice reply...');
-              await ctx.sendChatAction('record_audio');
-              const voiceReply = await this.voice.textToSpeech(response.content);
-              await ctx.replyWithVoice(
-                { source: voiceReply.audioBuffer },
-                { reply_to_message_id: ctx.message.message_id }
-              );
-              logger.info('✅ Voice reply sent');
-            } catch (voiceError) {
-              logger.warn('Could not send voice reply:', voiceError.message);
+              logger.info(`✅ AI response ready: ${response.tokens.output} tokens`);
+              await ctx.reply(`🤖 AI: ${response.content}`);
+            } else {
+              logger.warn('LLM not available');
             }
-          } else {
-            logger.error('LLM not available');
-            await ctx.reply(`🎤 You said: "${text}"\n\n⚠️ AI service not available`);
+          } catch (llmError) {
+            logger.error('LLM error (non-fatal):', llmError.message);
+            logger.info('Voice transcription worked though!');
           }
         } catch (stepError) {
           logger.error('Step error:', stepError.message, stepError.stack);
