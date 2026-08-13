@@ -333,16 +333,21 @@ export async function initOpenRouter() {
 
     logger.info('Testing OpenRouter connection...');
     // Simple test call
-    const result = await client.complete('Say "HustleBot initialized"', {
-      taskType: 'general',
-      maxTokens: 50
-    });
+    try {
+      const result = await client.complete('Say "HustleBot initialized"', {
+        taskType: 'general',
+        maxTokens: 50
+      });
+      logger.info('✅ OpenRouter initialized successfully');
+    } catch (testError) {
+      logger.warn('⚠️  OpenRouter test failed, but continuing:', testError.message);
+    }
 
-    logger.info('✅ OpenRouter initialized successfully');
     return client;
   } catch (error) {
-    logger.error('Failed to initialize OpenRouter:', error);
-    throw error;
+    logger.error('Failed to initialize OpenRouter client:', error);
+    // Still return a client even if initialization partially fails
+    return new OpenRouterClient(process.env.OPENROUTER_API_KEY);
   }
 }
 
