@@ -54,6 +54,19 @@ class HustleBotServer {
         logger.warn('⚠️  OpenRouter initialization failed, continuing:', error.message);
       }
 
+      // Try to initialize Deepgram voice (graceful failure)
+      try {
+        logger.info('🎤 Initializing Deepgram voice...');
+        const { initDeepgram } = await import('./voice/deepgram.js');
+        const voice = await initDeepgram();
+        if (voice) {
+          this.voice = voice;
+          logger.info('✅ Deepgram voice ready');
+        }
+      } catch (error) {
+        logger.warn('⚠️  Deepgram initialization failed, continuing:', error.message);
+      }
+
       // Try to initialize Telegram bot (graceful failure)
       if (process.env.TELEGRAM_BOT_TOKEN) {
         try {
@@ -121,7 +134,15 @@ class HustleBotServer {
         database: this.db ? 'connected' : 'disconnected',
         llm: this.llm ? 'ready' : 'unavailable',
         telegram: this.bot ? 'connected' : 'disconnected',
+        voice: this.voice ? 'ready' : 'unavailable',
         bot_token_set: !!process.env.TELEGRAM_BOT_TOKEN,
+        deepgram_key_set: !!process.env.DEEPGRAM_API_KEY,
+        features: {
+          text_chat: !!this.bot,
+          ai_responses: !!this.llm,
+          voice_messages: !!this.voice,
+          image_generation: !!this.llm
+        },
         timestamp: new Date().toISOString()
       });
     });
@@ -240,10 +261,93 @@ For more info, visit https://hustlebot.io
     // Handle text messages (must come after command handlers)
     this.bot.on('message', async (ctx) => {
       try {
-        logger.info(`Message from user ${ctx.from.id}: ${ctx.message.text || '[no text]'}`);
-        await ctx.reply('Got your message! More features coming soon...');
+        const userMessage = ctx.message.text || '';
+        logger.info(`Message from user ${ctx.from.id}: ${userMessage}`);
+
+        // Show "typing" indicator
+        await ctx.sendChatAction('typing');
+
+        // Try to get AI response
+        if (this.llm) {
+          try {
+            const response = await this.llm.complete(userMessage, {
+              taskType: 'general',
+              maxTokens: 1000,
+              temperature: 0.7
+            });
+
+            logger.info(`AI response for user ${ctx.from.id}: ${response.tokens.input} in, ${response.tokens.output} out, $${response.cost.toFixed(4)} cost`);
+            await ctx.reply(response.content);
+          } catch (error) {
+            logger.error('LLM error:', error.message);
+            await ctx.reply('⚠️ AI service temporarily unavailable. Please try again later.');
+          }
+        } else {
+          logger.warn('LLM not initialized, using fallback response');
+          await ctx.reply('Got your message! The AI service is loading. Please try again in a moment.');
+        }
       } catch (error) {
         logger.error('Error handling message:', error);
+        await ctx.reply('❌ Something went wrong. Please try again.');
+      }
+    });
+
+    // Handle voice messages
+    this.bot.on('voice', async (ctx) => {
+      try {
+        logger.info(`🎤 Voice message from user ${ctx.from.id}`);
+
+        if (!this.voice) {
+          await ctx.reply('⚠️ Voice service not available');
+          return;
+        }
+
+        // Show "recording" indicator
+        await ctx.sendChatAction('record_audio');
+
+        // Download voice file
+        const voiceFile = await ctx.telegram.getFile(ctx.message.voice.file_id);
+        const audioUrl = `https://api.telegram.org/file/bot${process.env.TELEGRAM_BOT_TOKEN}/${voiceFile.file_path}`;
+        const audioResponse = await fetch(audioUrl);
+        const audioBuffer = await audioResponse.buffer();
+
+        // Convert voice to text
+        const { text } = await this.voice.speechToText(audioBuffer, 'audio/ogg');
+        logger.info(`Transcribed: "${text}"`);
+
+        // Show "typing" indicator
+        await ctx.sendChatAction('typing');
+
+        // Get AI response
+        if (this.llm) {
+          const response = await this.llm.complete(text, {
+            taskType: 'general',
+            maxTokens: 1000
+          });
+
+          logger.info(`AI response: ${response.tokens.output} tokens, $${response.cost.toFixed(4)}`);
+
+          // Send as text first
+          await ctx.reply(`🎤 You said: "${text}"\n\n${response.content}`);
+
+          // Optionally send voice reply
+          try {
+            await ctx.sendChatAction('record_audio');
+            const voiceReply = await this.voice.textToSpeech(response.content);
+            await ctx.replyWithVoice(
+              { source: voiceReply.audioBuffer },
+              { reply_to_message_id: ctx.message.message_id }
+            );
+          } catch (voiceError) {
+            logger.warn('Could not send voice reply:', voiceError.message);
+            // Text response was already sent, so it's fine
+          }
+        } else {
+          await ctx.reply(`🎤 You said: "${text}"\n\n(AI service loading, please try again)`);
+        }
+      } catch (error) {
+        logger.error('Voice message error:', error);
+        await ctx.reply('❌ Error processing voice message');
       }
     });
 
@@ -251,11 +355,11 @@ For more info, visit https://hustlebot.io
     this.bot.catch((err, ctx) => {
       logger.error('Telegram bot error:', err);
       if (ctx) {
-        logger.error(`Error context: ${ctx.from?.id} - ${ctx.message?.text || 'unknown'}`);
+        logger.error(`Error context: ${ctx.from?.id} - ${ctx.message?.text || 'voice/unknown'}`);
       }
     });
 
-    logger.info('✅ Telegram handlers registered');
+    logger.info('✅ Telegram handlers registered (text + voice)');
   }
 
   async start() {

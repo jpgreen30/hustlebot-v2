@@ -18,13 +18,29 @@ class OpenRouterClient {
     this.apiKey = apiKey;
     this.baseUrl = 'https://openrouter.ai/api/v1';
     this.models = {
+      deepseek: {
+        id: 'deepseek/deepseek-chat',
+        cost_input: 0.00014,     // ULTRA CHEAP - $0.14 per 1M input tokens
+        cost_output: 0.00028,    // $0.28 per 1M output tokens
+        speed: 'fast',
+        quality: 'very_good',
+        best_for: ['general', 'chat', 'budget_conscious', 'high_volume', 'cheap_tasks']
+      },
+      kimi_k: {
+        id: 'moonshot/moonshot-v1-128k',  // Kimi K from Moonshot AI
+        cost_input: 0.0002,      // SUPER CHEAP for coding
+        cost_output: 0.0006,
+        speed: 'fast',
+        quality: 'excellent',
+        best_for: ['code_generation', 'coding', 'programming', 'debugging', 'technical']
+      },
       claude_sonnet: {
         id: 'anthropic/claude-3.5-sonnet',
         cost_input: 0.003,      // $3 per 1M input tokens
         cost_output: 0.015,      // $15 per 1M output tokens
         speed: 'medium',
         quality: 'highest',
-        best_for: ['complex_reasoning', 'coding', 'planning', 'course_design']
+        best_for: ['complex_reasoning', 'planning', 'course_design', 'analysis']
       },
       gpt_4o: {
         id: 'openai/gpt-4o',
@@ -40,7 +56,7 @@ class OpenRouterClient {
         cost_output: 0.010,
         speed: 'fast',
         quality: 'good',
-        best_for: ['fast_copywriting', 'cheap_tasks', 'real_time', 'trends']
+        best_for: ['fast_copywriting', 'real_time', 'trends']
       },
       gemini_2: {
         id: 'google/gemini-2.0-flash',
@@ -65,6 +81,22 @@ class OpenRouterClient {
         speed: 'medium',
         quality: 'high',
         best_for: ['long_context', 'documents', 'research', 'rag']
+      },
+      replicate_flux: {
+        id: 'replicate/flux-pro',
+        cost_input: 0,
+        cost_output: 0.06,       // $0.06 per image
+        speed: 'medium',
+        quality: 'excellent',
+        best_for: ['image_generation', 'text_to_image', 'dall_e_alternative']
+      },
+      replicate_flux_lite: {
+        id: 'replicate/flux-dev',
+        cost_input: 0,
+        cost_output: 0.025,      // $0.025 per image - ultra cheap
+        speed: 'fast',
+        quality: 'very_good',
+        best_for: ['fast_images', 'budget_image_generation', 'cheap_images']
       }
     };
 
@@ -84,15 +116,16 @@ class OpenRouterClient {
 
     // Decision tree for model selection
     if (taskType === 'complex_reasoning') {
-      return budgetTight ? this.models.llama_70b : this.models.claude_sonnet;
+      return budgetTight ? this.models.deepseek : this.models.claude_sonnet;
     }
 
     if (taskType === 'fast_copywriting') {
       return this.models.grok_2;
     }
 
-    if (taskType === 'code_generation') {
-      return this.models.claude_sonnet;
+    if (taskType === 'code_generation' || taskType === 'coding' || taskType === 'programming') {
+      // Use Kimi K for coding - excellent quality + ultra cheap
+      return this.models.kimi_k;
     }
 
     if (taskType === 'image_analysis' || isMultimodal) {
@@ -104,19 +137,24 @@ class OpenRouterClient {
     }
 
     if (taskType === 'bulk_generation' && budgetTight) {
-      return this.models.llama_70b;
+      return this.models.deepseek;  // Ultra cheap for bulk
     }
 
     if (taskType === 'real_time_trends') {
       return this.models.grok_2;
     }
 
-    if (needsSpeed) {
-      return this.models.gpt_4o;
+    if (taskType === 'image_generation' || taskType === 'text_to_image') {
+      // Use Replicate for images - ultra cheap
+      return budgetTight ? this.models.replicate_flux_lite : this.models.replicate_flux;
     }
 
-    // Default: Claude Sonnet (high quality, reliable)
-    return this.models.claude_sonnet;
+    if (needsSpeed) {
+      return this.models.deepseek;  // Fast + cheap
+    }
+
+    // Default: Deepseek for general chat (ultra cheap, very good quality)
+    return this.models.deepseek;
   }
 
   /**
