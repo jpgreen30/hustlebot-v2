@@ -11,7 +11,6 @@
 
 import logger from '../utils/logger.js';
 import { Deepgram } from '@deepgram/sdk';
-import { ElevenLabs } from 'elevenlabs';
 
 class TelegramUpdateHandler {
   constructor(db, commandRouter, orchestrator, budgetController) {
@@ -21,7 +20,6 @@ class TelegramUpdateHandler {
     this.budgetController = budgetController;
     
     this.deepgram = new Deepgram(process.env.DEEPGRAM_API_KEY);
-    this.elevenlabs = new ElevenLabs(process.env.ELEVENLABS_API_KEY);
   }
 
   /**
