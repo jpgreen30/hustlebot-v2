@@ -111,18 +111,23 @@ class HustleBotServer {
       });
     });
 
-    // Telegram webhook
-    if (this.bot) {
-      this.app.post('/api/telegram/webhook', async (req, res) => {
-        try {
-          await this.bot.handleUpdate(req.body);
-          res.json({ ok: true });
-        } catch (error) {
-          logger.error('Webhook error:', error);
-          res.status(500).json({ ok: false, error: error.message });
+    // Telegram webhook - always register the route
+    this.app.post('/api/telegram/webhook', async (req, res) => {
+      try {
+        logger.info('📨 Webhook received:', JSON.stringify(req.body).substring(0, 200));
+
+        if (!this.bot) {
+          logger.warn('⚠️  Bot not initialized, cannot process update');
+          return res.status(503).json({ ok: false, error: 'Bot not ready' });
         }
-      });
-    }
+
+        await this.bot.handleUpdate(req.body);
+        res.json({ ok: true });
+      } catch (error) {
+        logger.error('Webhook error:', error);
+        res.status(500).json({ ok: false, error: error.message });
+      }
+    });
 
     // Default route
     this.app.get('/', (req, res) => {
