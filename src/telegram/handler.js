@@ -10,7 +10,7 @@
  */
 
 import logger from '../utils/logger.js';
-import { Deepgram } from 'deepgram-sdk';
+import { Deepgram } from '@deepgram/sdk';
 import { ElevenLabs } from 'elevenlabs';
 
 class TelegramUpdateHandler {
