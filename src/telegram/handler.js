@@ -10,7 +10,7 @@
  */
 
 import logger from '../utils/logger.js';
-import { Deepgram } from '@deepgram/sdk';
+import { createClient } from '@deepgram/sdk';
 
 class TelegramUpdateHandler {
   constructor(db, commandRouter, orchestrator, budgetController) {
@@ -18,8 +18,8 @@ class TelegramUpdateHandler {
     this.commandRouter = commandRouter;
     this.orchestrator = orchestrator;
     this.budgetController = budgetController;
-    
-    this.deepgram = new Deepgram(process.env.DEEPGRAM_API_KEY);
+
+    this.deepgram = createClient(process.env.DEEPGRAM_API_KEY);
   }
 
   /**
