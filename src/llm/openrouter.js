@@ -329,25 +329,17 @@ class OpenRouterClient {
  */
 export async function initOpenRouter() {
   try {
-    const client = new OpenRouterClient(process.env.OPENROUTER_API_KEY);
-
-    logger.info('Testing OpenRouter connection...');
-    // Simple test call
-    try {
-      const result = await client.complete('Say "HustleBot initialized"', {
-        taskType: 'general',
-        maxTokens: 50
-      });
-      logger.info('✅ OpenRouter initialized successfully');
-    } catch (testError) {
-      logger.warn('⚠️  OpenRouter test failed, but continuing:', testError.message);
+    if (!process.env.OPENROUTER_API_KEY) {
+      logger.warn('⚠️  OPENROUTER_API_KEY not set');
+      return new OpenRouterClient('dummy-key');
     }
 
+    const client = new OpenRouterClient(process.env.OPENROUTER_API_KEY);
+    logger.info('✅ OpenRouter client ready');
     return client;
   } catch (error) {
-    logger.error('Failed to initialize OpenRouter client:', error);
-    // Still return a client even if initialization partially fails
-    return new OpenRouterClient(process.env.OPENROUTER_API_KEY);
+    logger.error('Failed to initialize OpenRouter:', error.message);
+    return new OpenRouterClient('dummy-key');
   }
 }
 
