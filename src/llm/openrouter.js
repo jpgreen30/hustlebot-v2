@@ -112,11 +112,11 @@ class OpenRouterClient {
     }
 
     if (needsSpeed) {
-      return this.models.grok_2;
+      return this.models.gpt_4o;
     }
 
-    // Default: Grok 2 (fast, cheap, good quality)
-    return this.models.grok_2;
+    // Default: Claude Sonnet (high quality, reliable)
+    return this.models.claude_sonnet;
   }
 
   /**
