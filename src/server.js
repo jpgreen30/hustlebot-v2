@@ -61,6 +61,19 @@ class HustleBotServer {
           const { Telegraf } = await import('telegraf');
           this.bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
           this.setupTelegramHandlers();
+
+          // Register commands with Telegram so they show in UI
+          try {
+            await this.bot.telegram.setMyCommands([
+              { command: 'start', description: 'Welcome & quick start' },
+              { command: 'help', description: 'Show available commands' },
+              { command: 'status', description: 'Check service status' }
+            ]);
+            logger.info('✅ Commands registered with Telegram');
+          } catch (error) {
+            logger.warn('⚠️  Could not register commands:', error.message);
+          }
+
           logger.info('✅ Telegram bot ready');
         } catch (error) {
           logger.warn('⚠️  Telegram bot initialization failed:', error.message);
@@ -107,7 +120,19 @@ class HustleBotServer {
         version: '2.0.0',
         database: this.db ? 'connected' : 'disconnected',
         llm: this.llm ? 'ready' : 'unavailable',
-        telegram: this.bot ? 'connected' : 'disconnected'
+        telegram: this.bot ? 'connected' : 'disconnected',
+        bot_token_set: !!process.env.TELEGRAM_BOT_TOKEN,
+        timestamp: new Date().toISOString()
+      });
+    });
+
+    // Debug endpoint
+    this.app.get('/api/debug', (req, res) => {
+      res.json({
+        bot_initialized: !!this.bot,
+        bot_token_exists: !!process.env.TELEGRAM_BOT_TOKEN,
+        port: this.port,
+        timestamp: new Date().toISOString()
       });
     });
 
