@@ -1,0 +1,62 @@
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Node modules
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# Build outputs
+dist/
+build/
+.next/
+out/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Logs
+logs/
+*.log
+
+# Temporary files
+tmp/
+temp/
+.cache/
+
+# OS files
+Thumbs.db
+.DS_Store
+
+# Package lock
+package-lock.json
+yarn.lock
+
+# Test coverage
+coverage/
+.nyc_output/
+
+# Runtime data
+pids/
+*.pid
+*.seed
+*.pid.lock
+
+# Database
+*.sqlite
+*.sqlite3
+
+# Audio/Video files (large)
+*.mp3
+*.mp4
+*.wav
+
+# Generated files
+src/generated/

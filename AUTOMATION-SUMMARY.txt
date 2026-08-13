@@ -1,0 +1,314 @@
+================================================================================
+                    CLAUDE CODE/COWORK AUTOMATION GUIDE
+================================================================================
+
+🎯 YOUR GOAL: Fully automate setup using Claude Code/Cowork with browser & terminal
+
+📁 LOCATION: /home/claude/hustlebot-v2/
+
+================================================================================
+                              3 FILES YOU NEED
+================================================================================
+
+1. PASTE-THIS-IN-CLAUDE-CODE.md
+   ↓ This is the MAIN automation prompt
+   ↓ Copy everything in this file
+   ↓ Paste into Claude Code or Cowork
+   ↓ Claude will do all the work
+
+2. USE-CLAUDE-CODE.md
+   ↓ How to use Claude Code/Cowork
+   ↓ What to expect
+   ↓ Troubleshooting
+
+3. CLAUDE-CODE-AUTOMATION.md
+   ↓ Full detailed version
+   ↓ Complete reference guide
+   ↓ Advanced options
+
+================================================================================
+                            THE QUICK PROCESS
+================================================================================
+
+STEP 1: Get the Prompt
+    Open: PASTE-THIS-IN-CLAUDE-CODE.md
+    Copy: Everything in the big code block
+
+STEP 2: Open Claude Code
+    ✅ Claude Desktop App → Create New Task
+    OR
+    ✅ Cowork App → New Task
+    OR
+    ✅ https://claude.ai (in web)
+
+STEP 3: Paste & Run
+    Paste the prompt you copied
+    Claude will start automating
+
+STEP 4: Watch It Work
+    Claude uses browser to setup services
+    Claude uses terminal to run commands
+    You might need to do Telegram bot setup (manual, takes 2 minutes)
+
+STEP 5: Get Your URLs & Credentials
+    After ~45 minutes, Claude gives you:
+    - GitHub repo URL
+    - Render deployment URL
+    - Bot credentials
+    - Everything you need
+
+================================================================================
+                         WHAT GETS AUTOMATED
+================================================================================
+
+✅ AUTOMATED BY CLAUDE:
+  - GitHub repo creation & push
+  - Supabase project setup
+  - Database configuration
+  - .env file creation
+  - npm install & migrations
+  - Render deployment
+  - Telegram webhook setup
+  - Health check verification
+
+⚠️  MANUAL (You do it):
+  - Telegram @BotFather /newbot command (2 minutes)
+  - That's it! Claude guides you through it
+
+================================================================================
+                           TIMELINE & EFFORT
+================================================================================
+
+YOUR EFFORT:
+  - Copy prompt: 2 min
+  - Paste in Claude: 1 min
+  - Do Telegram setup: 2 min (optional, Claude guides)
+  - Total: ~5 minutes of actual work
+
+CLAUDE'S EFFORT:
+  - Setup everything: ~45 minutes
+  - All automated
+  - You just watch
+
+RESULT:
+  - Production-ready AI platform
+  - Live on Render
+  - Telegram bot responding
+  - Database connected
+  - 17 agents working
+
+================================================================================
+                          SUCCESS INDICATORS
+================================================================================
+
+You'll know it worked when Claude shows:
+
+✅ GitHub repo created
+✅ Supabase project initialized
+✅ OpenRouter key generated
+✅ Telegram bot token saved
+✅ .env file created
+✅ npm install completed
+✅ Database migrations ran
+✅ Render deployment live (green checkmark)
+✅ Health endpoint returns 200 OK
+✅ Telegram bot responds to test message
+✅ Final summary with all URLs
+
+================================================================================
+                             WHAT YOU GET
+================================================================================
+
+After automation completes, you receive:
+
+GitHub:
+  https://github.com/[your-username]/hustlebot-v2
+
+Render (Live Production):
+  https://hustlebot-v2.onrender.com
+
+Telegram Bot:
+  @hustlebot-v2-[random-id]
+
+API Keys:
+  - OpenRouter: sk-or-v1-...
+  - Supabase: your-db-connection-string
+  - Telegram: your-bot-token
+
+Cost Tracking:
+  $100/month hard limit
+  Usage tracking enabled
+
+17 AI Agents:
+  - Copywriter
+  - Content Writer
+  - Frontend Developer
+  - Backend Developer
+  - Database Agent
+  - DevOps Agent
+  - Landing Page Agent
+  - Product Agent
+  - Marketing Agent
+  - Sales Agent
+  - Finance Agent
+  - Analytics Agent
+  - Ideation Agent
+  - Video Agent
+  - Social Media Agent
+  - Plus 2 tool factories
+
+================================================================================
+                            EXACT INSTRUCTIONS
+================================================================================
+
+1. RIGHT NOW:
+   Open this file:
+   /home/claude/hustlebot-v2/PASTE-THIS-IN-CLAUDE-CODE.md
+
+2. Copy the prompt:
+   Select and copy everything in the big code block
+   (should be ~300 lines)
+
+3. Open Claude Code or Cowork:
+   - Desktop App: New Task
+   - Web: https://claude.ai → Cowork tab
+   - Paste the prompt
+
+4. Hit Send/Run
+
+5. Watch Claude automate everything
+
+6. When it asks for Telegram token:
+   - Open Telegram
+   - Find @BotFather
+   - Send /newbot
+   - Follow prompts
+   - Copy token
+   - Paste into Claude
+
+7. Wait for completion (~45 minutes)
+
+8. Receive final summary with all URLs
+
+9. Test your bot in Telegram:
+   Send: "Generate 5 headlines for fitness app"
+   Receive: AI-generated headlines
+
+Done! Your platform is live! 🚀
+
+================================================================================
+                         TROUBLESHOOTING
+================================================================================
+
+If Claude gets stuck:
+  Send: "Continue with next step"
+
+If something fails:
+  Claude will show error message
+  Claude will suggest fix
+  Claude will retry
+
+If you need to pause:
+  Send: "Pause here"
+  Claude will wait
+
+If you want to stop:
+  Send: "Stop automation"
+  Claude will save progress & summarize
+
+================================================================================
+                            FILE STRUCTURE
+================================================================================
+
+After automation, you'll have:
+
+/home/claude/hustlebot-v2/
+├── .env                      ← Created with all credentials
+├── .git/                      ← Git history
+├── node_modules/              ← Dependencies
+├── src/                        ← Application code (already exists)
+├── README.md                   ← Documentation
+├── PASTE-THIS-IN-CLAUDE-CODE.md ← The automation prompt (this file)
+└── [other docs]
+
+GitHub will have:
+  hustlebot-v2 repository with all code
+
+Supabase will have:
+  hustlebot project with database initialized
+
+Render will have:
+  hustlebot-v2 service running (Live)
+
+================================================================================
+                          COST ESTIMATES
+================================================================================
+
+Setup cost:
+  GitHub: Free
+  Supabase: Free tier (up to 500MB)
+  OpenRouter: Free (sign-up credits)
+  Telegram: Free
+  Render: Free tier (or $7/month for always-on)
+  Total: $0-7 for setup
+
+Monthly operational cost:
+  Depends on usage
+  Estimated: $5-50/month for light use
+  Hard limit: $100/month (you set)
+  Budget tracking: Enabled
+
+Cost per operation:
+  5 headlines: $0.02
+  Blog post: $0.05
+  React component: $0.08
+  50 leads: $0.25
+  Landing page: $0.15
+
+================================================================================
+                         NEXT STEPS AFTER AUTOMATION
+================================================================================
+
+1. Test your bot in Telegram
+2. Check /status to see all 17 agents
+3. Monitor /budget to track spending
+4. Try different commands
+5. Build Phase 3 (more factories) when ready
+6. Scale infrastructure if needed
+
+================================================================================
+                              START NOW
+================================================================================
+
+Open this file:
+  /home/claude/hustlebot-v2/PASTE-THIS-IN-CLAUDE-CODE.md
+
+Follow these steps:
+  1. Copy the prompt
+  2. Open Claude Code/Cowork
+  3. Paste the prompt
+  4. Let Claude do the work
+
+Timeline:
+  Your work: 5 minutes
+  Claude's work: 45 minutes
+  Total: ~50 minutes
+
+Result:
+  ✅ Production AI platform live on Render
+  ✅ 17 agents working
+  ✅ Telegram bot responding
+  ✅ Everything tracked and costed
+  ✅ Ready to scale
+
+================================================================================
+
+Questions? See:
+- PASTE-THIS-IN-CLAUDE-CODE.md (main prompt)
+- USE-CLAUDE-CODE.md (how to use)
+- CLAUDE-CODE-AUTOMATION.md (detailed guide)
+- README.md (full documentation)
+
+Ready to go? ⬇️ Copy the prompt and paste into Claude Code/Cowork! 🚀
+
+================================================================================
