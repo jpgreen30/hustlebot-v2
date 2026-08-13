@@ -113,8 +113,14 @@ class HustleBotServer {
 
     // Telegram webhook
     if (this.bot) {
-      this.app.post('/api/telegram/webhook', (req, res) => {
-        this.bot.handleUpdate(req.body, res);
+      this.app.post('/api/telegram/webhook', async (req, res) => {
+        try {
+          await this.bot.handleUpdate(req.body);
+          res.json({ ok: true });
+        } catch (error) {
+          logger.error('Webhook error:', error);
+          res.status(500).json({ ok: false, error: error.message });
+        }
       });
     }
 
@@ -152,9 +158,12 @@ class HustleBotServer {
   setupTelegramHandlers() {
     if (!this.bot) return;
 
+    logger.info('📱 Setting up Telegram command handlers...');
+
     // Handle /start command
     this.bot.command('start', async (ctx) => {
       try {
+        logger.info(`/start command from user ${ctx.from.id}`);
         await ctx.reply('👋 Welcome to HustleBot v2!\n\n📚 Send /help for available commands.');
       } catch (error) {
         logger.error('Error handling /start:', error);
@@ -164,6 +173,7 @@ class HustleBotServer {
     // Handle /help command
     this.bot.command('help', async (ctx) => {
       try {
+        logger.info(`/help command from user ${ctx.from.id}`);
         const helpMessage = `
 <b>🤖 HustleBot v2 Commands</b>
 
@@ -190,16 +200,17 @@ For more info, visit https://hustlebot.io
     // Handle /status command
     this.bot.command('status', async (ctx) => {
       try {
+        logger.info(`/status command from user ${ctx.from.id}`);
         await ctx.reply('✅ HustleBot v2 is running and ready!\n\nMore features coming soon...');
       } catch (error) {
         logger.error('Error handling /status:', error);
       }
     });
 
-    // Handle text messages
+    // Handle text messages (must come after command handlers)
     this.bot.on('message', async (ctx) => {
       try {
-        logger.info(`Message from ${ctx.from.id}: ${ctx.message.text}`);
+        logger.info(`Message from user ${ctx.from.id}: ${ctx.message.text || '[no text]'}`);
         await ctx.reply('Got your message! More features coming soon...');
       } catch (error) {
         logger.error('Error handling message:', error);
@@ -209,7 +220,12 @@ For more info, visit https://hustlebot.io
     // Error handling
     this.bot.catch((err, ctx) => {
       logger.error('Telegram bot error:', err);
+      if (ctx) {
+        logger.error(`Error context: ${ctx.from?.id} - ${ctx.message?.text || 'unknown'}`);
+      }
     });
+
+    logger.info('✅ Telegram handlers registered');
   }
 
   async start() {
