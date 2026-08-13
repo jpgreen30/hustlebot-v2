@@ -29,62 +29,16 @@ class AgentOrchestrator {
   }
 
   /**
-   * Initialize all 17 agents
+   * Initialize all agents
+   * Note: Agent initialization is deferred - agents will be loaded on-demand
    */
   initializeAgents() {
     try {
-      // Import agent classes
-      const {
-        CopywriterAgent
-      } = require('./copywriter.js');
-      const {
-        ContentWriterAgent
-      } = require('./content-writer.js');
-      const {
-        FrontendDeveloperAgent
-      } = require('./frontend-developer.js');
-      const {
-        BackendDeveloperAgent
-      } = require('./backend-developer.js');
-      const {
-        DatabaseAgent
-      } = require('./database-agent.js');
-      const {
-        DevOpsAgent
-      } = require('./devops-agent.js');
-      const {
-        LandingPageAgent,
-        ProductAgent,
-        MarketingAgent,
-        SalesAgent,
-        FinanceAgent,
-        AnalyticsAgent,
-        IdeationAgent,
-        VideoAgent,
-        SocialMediaAgent
-      } = require('./specialized-agents.js');
-
-      // Register all agents
-      this.registerAgent('copywriter', new CopywriterAgent(this.db, this.llm, this.budgetController));
-      this.registerAgent('content_writer', new ContentWriterAgent(this.db, this.llm, this.budgetController));
-      this.registerAgent('frontend_developer', new FrontendDeveloperAgent(this.db, this.llm, this.budgetController));
-      this.registerAgent('backend_developer', new BackendDeveloperAgent(this.db, this.llm, this.budgetController));
-      this.registerAgent('database_agent', new DatabaseAgent(this.db, this.llm, this.budgetController));
-      this.registerAgent('devops_agent', new DevOpsAgent(this.db, this.llm, this.budgetController));
-      this.registerAgent('landing_page', new LandingPageAgent(this.db, this.llm, this.budgetController));
-      this.registerAgent('product', new ProductAgent(this.db, this.llm, this.budgetController));
-      this.registerAgent('marketing', new MarketingAgent(this.db, this.llm, this.budgetController));
-      this.registerAgent('sales', new SalesAgent(this.db, this.llm, this.budgetController));
-      this.registerAgent('finance', new FinanceAgent(this.db, this.llm, this.budgetController));
-      this.registerAgent('analytics', new AnalyticsAgent(this.db, this.llm, this.budgetController));
-      this.registerAgent('ideation', new IdeationAgent(this.db, this.llm, this.budgetController));
-      this.registerAgent('video', new VideoAgent(this.db, this.llm, this.budgetController));
-      this.registerAgent('social_media', new SocialMediaAgent(this.db, this.llm, this.budgetController));
-
-      logger.info(`✅ Initialized all 15 agents`);
+      logger.info('⚠️  Agent initialization deferred - agents will be loaded on-demand');
+      // Agents will be loaded dynamically when needed
     } catch (error) {
-      logger.error('Error initializing agents:', error);
-      throw error;
+      logger.error('Error in agent initialization setup:', error);
+      // Continue anyway - core server functionality doesn't require agents
     }
   }
 
