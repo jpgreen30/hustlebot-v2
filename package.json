@@ -35,7 +35,6 @@
     "form-data": "^4.0.0",
     "cheerio": "^1.0.0-rc.12",
     "playwright": "^1.40.0",
-    "mem0-js": "^0.5.0",
     "sharp": "^0.33.0"
   },
   "devDependencies": {
