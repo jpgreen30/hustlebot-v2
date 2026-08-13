@@ -298,56 +298,68 @@ For more info, visit https://hustlebot.io
         logger.info(`🎤 Voice message from user ${ctx.from.id}`);
 
         if (!this.voice) {
-          await ctx.reply('⚠️ Voice service not available');
+          logger.error('Voice service not initialized');
+          await ctx.reply('⚠️ Voice service not available. Deepgram not configured.');
           return;
         }
 
         // Show "recording" indicator
         await ctx.sendChatAction('record_audio');
 
-        // Download voice file
-        const voiceFile = await ctx.telegram.getFile(ctx.message.voice.file_id);
-        const audioUrl = `https://api.telegram.org/file/bot${process.env.TELEGRAM_BOT_TOKEN}/${voiceFile.file_path}`;
-        const audioResponse = await fetch(audioUrl);
-        const audioBuffer = await audioResponse.buffer();
+        try {
+          // Download voice file
+          logger.info('Downloading voice file...');
+          const voiceFile = await ctx.telegram.getFile(ctx.message.voice.file_id);
+          const audioUrl = `https://api.telegram.org/file/bot${process.env.TELEGRAM_BOT_TOKEN}/${voiceFile.file_path}`;
+          const audioResponse = await fetch(audioUrl);
+          const audioBuffer = await audioResponse.buffer();
+          logger.info(`Audio buffer size: ${audioBuffer.length} bytes`);
 
-        // Convert voice to text
-        const { text } = await this.voice.speechToText(audioBuffer, 'audio/ogg');
-        logger.info(`Transcribed: "${text}"`);
+          // Convert voice to text
+          logger.info('Converting speech to text...');
+          const { text } = await this.voice.speechToText(audioBuffer, 'audio/ogg');
+          logger.info(`✅ Transcribed: "${text}"`);
 
-        // Show "typing" indicator
-        await ctx.sendChatAction('typing');
+          // Show "typing" indicator
+          await ctx.sendChatAction('typing');
 
-        // Get AI response
-        if (this.llm) {
-          const response = await this.llm.complete(text, {
-            taskType: 'general',
-            maxTokens: 1000
-          });
+          // Get AI response
+          if (this.llm) {
+            logger.info('Getting AI response...');
+            const response = await this.llm.complete(text, {
+              taskType: 'general',
+              maxTokens: 1000
+            });
 
-          logger.info(`AI response: ${response.tokens.output} tokens, $${response.cost.toFixed(4)}`);
+            logger.info(`✅ AI response ready: ${response.tokens.output} tokens`);
 
-          // Send as text first
-          await ctx.reply(`🎤 You said: "${text}"\n\n${response.content}`);
+            // Send as text first
+            await ctx.reply(`🎤 You said: "${text}"\n\n${response.content}`);
 
-          // Optionally send voice reply
-          try {
-            await ctx.sendChatAction('record_audio');
-            const voiceReply = await this.voice.textToSpeech(response.content);
-            await ctx.replyWithVoice(
-              { source: voiceReply.audioBuffer },
-              { reply_to_message_id: ctx.message.message_id }
-            );
-          } catch (voiceError) {
-            logger.warn('Could not send voice reply:', voiceError.message);
-            // Text response was already sent, so it's fine
+            // Optionally send voice reply
+            try {
+              logger.info('Generating voice reply...');
+              await ctx.sendChatAction('record_audio');
+              const voiceReply = await this.voice.textToSpeech(response.content);
+              await ctx.replyWithVoice(
+                { source: voiceReply.audioBuffer },
+                { reply_to_message_id: ctx.message.message_id }
+              );
+              logger.info('✅ Voice reply sent');
+            } catch (voiceError) {
+              logger.warn('Could not send voice reply:', voiceError.message);
+            }
+          } else {
+            logger.error('LLM not available');
+            await ctx.reply(`🎤 You said: "${text}"\n\n⚠️ AI service not available`);
           }
-        } else {
-          await ctx.reply(`🎤 You said: "${text}"\n\n(AI service loading, please try again)`);
+        } catch (stepError) {
+          logger.error('Step error:', stepError.message, stepError.stack);
+          await ctx.reply(`❌ Error: ${stepError.message}`);
         }
       } catch (error) {
-        logger.error('Voice message error:', error);
-        await ctx.reply('❌ Error processing voice message');
+        logger.error('Voice message error:', error.message, error.stack);
+        await ctx.reply(`❌ Voice error: ${error.message}`);
       }
     });
 
