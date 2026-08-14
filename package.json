@@ -10,6 +10,7 @@
     "mcp:build": "node scripts/build-mcp.js",
     "mcp:validate": "node scripts/validate-tools.js",
     "db:migrate": "node scripts/migrate.js",
+    "bootstrap": "node scripts/bootstrap.js",
     "test": "node --test src/**/*.test.js",
     "lint": "eslint src/",
     "format": "prettier --write src/",

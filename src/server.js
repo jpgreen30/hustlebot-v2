@@ -32,15 +32,97 @@ class HustleBotServer {
       this.setupRoutes();
       logger.info('✅ Express server ready');
 
-      // Try to initialize Supabase (graceful failure)
+      // Try to initialize Database layer (Phase 1)
       try {
-        logger.info('📦 Connecting to Supabase...');
-        const { initSupabase } = await import('./db/supabase.js');
-        const db = await initSupabase();
-        logger.info('✅ Supabase connected');
-        this.db = db;
+        logger.info('📦 Initializing Database layer...');
+        const { Database } = await import('./core/database.js');
+        this.database = new Database();
+        await this.database.initialize();
+        logger.info('✅ Database layer ready');
       } catch (error) {
-        logger.warn('⚠️  Supabase connection failed, continuing without DB:', error.message);
+        logger.warn('⚠️  Database layer initialization failed, continuing without registries:', error.message);
+      }
+
+      // Try to initialize Phase 1 registries (if database available)
+      if (this.database) {
+        try {
+          logger.info('🔧 Initializing Phase 1 registries...');
+
+          // Provider abstraction
+          const { ProviderAbstraction } = await import('./core/provider-abstraction.js');
+          this.providers = new ProviderAbstraction();
+          await this.providers.initialize();
+          logger.info('  ✓ Provider abstraction ready');
+
+          // Capability registry
+          const { CapabilityRegistry } = await import('./core/capability-registry.js');
+          this.capabilityRegistry = new CapabilityRegistry(this.database);
+          await this.capabilityRegistry.initialize();
+          logger.info('  ✓ Capability registry ready');
+
+          // Tool registry
+          const { ToolRegistry } = await import('./core/tool-registry.js');
+          this.toolRegistry = new ToolRegistry(this.database);
+          await this.toolRegistry.initialize();
+          logger.info('  ✓ Tool registry ready');
+
+          // Media abstraction
+          const { MediaAbstraction } = await import('./core/media-abstraction.js');
+          this.media = new MediaAbstraction(this.providers);
+          logger.info('  ✓ Media abstraction ready');
+
+          // Job queue
+          const { JobQueue } = await import('./core/job-queue.js');
+          this.jobQueue = new JobQueue({ db: this.database });
+          await this.jobQueue.initialize();
+          logger.info('  ✓ Job queue ready');
+
+          // Agent mailbox
+          const { AgentMailbox } = await import('./core/agent-mailbox.js');
+          this.mailbox = new AgentMailbox(this.database);
+          await this.mailbox.initialize();
+          logger.info('  ✓ Agent mailbox ready');
+
+          // Planning DAG
+          const { PlanningDAG } = await import('./core/planning-dag.js');
+          this.planningDAG = new PlanningDAG(this.database);
+          logger.info('  ✓ Planning DAG ready');
+
+          // Agent identities
+          const { AgentIdentities } = await import('./core/agent-identities.js');
+          this.agentIdentities = new AgentIdentities(this.database, this.capabilityRegistry);
+          await this.agentIdentities.initialize();
+          logger.info('  ✓ Agent identities ready');
+
+          // Shared audit logs
+          const { SharedAuditLogs } = await import('./core/shared-audit-logs.js');
+          this.auditLogs = new SharedAuditLogs(this.database);
+          await this.auditLogs.initialize();
+          logger.info('  ✓ Audit logs ready');
+
+          // Policy & approval layer
+          const { PolicyApprovalLayer } = await import('./core/policy-approval-layer.js');
+          this.policies = new PolicyApprovalLayer(this.database, this.auditLogs);
+          await this.policies.initialize();
+          logger.info('  ✓ Policy & approval layer ready');
+
+          // Orchestrator (wires all registries together)
+          const { AgentOrchestrator } = await import('./agents/orchestrator.js');
+          this.orchestrator = new AgentOrchestrator(
+            this.capabilityRegistry,
+            this.agentIdentities,
+            this.jobQueue,
+            this.mailbox,
+            this.auditLogs,
+            this.policies,
+            this.planningDAG
+          );
+          logger.info('  ✓ Orchestrator ready');
+
+          logger.info('✅ All Phase 1 registries initialized');
+        } catch (error) {
+          logger.warn('⚠️  Registry initialization failed:', error.message);
+        }
       }
 
       // Try to initialize OpenRouter (graceful failure)
@@ -128,23 +210,42 @@ class HustleBotServer {
 
     // Status endpoint
     this.app.get('/api/status', (req, res) => {
-      res.json({
+      const status = {
         status: 'running',
         version: '2.0.0',
-        database: this.db ? 'connected' : 'disconnected',
-        llm: this.llm ? 'ready' : 'unavailable',
-        telegram: this.bot ? 'connected' : 'disconnected',
-        voice: this.voice ? 'ready' : 'unavailable',
-        bot_token_set: !!process.env.TELEGRAM_BOT_TOKEN,
-        deepgram_key_set: !!process.env.DEEPGRAM_API_KEY,
-        features: {
-          text_chat: !!this.bot,
-          ai_responses: !!this.llm,
-          voice_messages: !!this.voice,
-          image_generation: !!this.llm
+        phase_0: {
+          database: this.database ? 'connected' : 'disconnected',
+          telegram: this.bot ? 'connected' : 'disconnected',
+          voice: this.voice ? 'ready' : 'unavailable'
         },
+        phase_1_registries: {
+          capabilities: this.capabilityRegistry ? 'ready' : 'unavailable',
+          tools: this.toolRegistry ? 'ready' : 'unavailable',
+          agents: this.agentIdentities ? 'ready' : 'unavailable',
+          job_queue: this.jobQueue ? 'ready' : 'unavailable',
+          mailbox: this.mailbox ? 'ready' : 'unavailable',
+          audit_logs: this.auditLogs ? 'ready' : 'unavailable',
+          policies: this.policies ? 'ready' : 'unavailable'
+        },
+        providers: this.providers ? this.providers.getProviderStatus() : null,
         timestamp: new Date().toISOString()
-      });
+      };
+
+      // Add registry stats if available
+      if (this.capabilityRegistry) {
+        status.registry_stats = {
+          capabilities: this.capabilityRegistry.getStats(),
+          tools: this.toolRegistry?.getStats(),
+          agents: this.agentIdentities?.getStats()
+        };
+      }
+
+      // Add orchestrator stats if available
+      if (this.orchestrator) {
+        status.orchestrator = this.orchestrator.getStats();
+      }
+
+      res.json(status);
     });
 
     // Debug endpoint
@@ -155,6 +256,89 @@ class HustleBotServer {
         port: this.port,
         timestamp: new Date().toISOString()
       });
+    });
+
+    // Orchestrator: Spawn swarm
+    this.app.post('/api/orchestrator/swarm', async (req, res) => {
+      try {
+        if (!this.orchestrator) {
+          return res.status(503).json({ ok: false, error: 'Orchestrator not available' });
+        }
+
+        const { task_name, user_id, project_id, parameters, options } = req.body;
+
+        if (!task_name || !user_id) {
+          return res.status(400).json({ ok: false, error: 'task_name and user_id required' });
+        }
+
+        const result = await this.orchestrator.spawnSwarm(
+          task_name,
+          user_id,
+          project_id,
+          parameters,
+          options
+        );
+
+        res.json({ ok: result.success, data: result });
+      } catch (error) {
+        logger.error('Orchestrator error:', error);
+        res.status(500).json({ ok: false, error: error.message });
+      }
+    });
+
+    // Orchestrator: Get swarm status
+    this.app.get('/api/orchestrator/swarm/:swarmId', async (req, res) => {
+      try {
+        if (!this.orchestrator) {
+          return res.status(503).json({ ok: false, error: 'Orchestrator not available' });
+        }
+
+        const status = await this.orchestrator.getSwarmStatus(req.params.swarmId);
+
+        if (!status) {
+          return res.status(404).json({ ok: false, error: 'Swarm not found' });
+        }
+
+        res.json({ ok: true, data: status });
+      } catch (error) {
+        logger.error('Orchestrator error:', error);
+        res.status(500).json({ ok: false, error: error.message });
+      }
+    });
+
+    // Orchestrator: Aggregate results
+    this.app.post('/api/orchestrator/swarm/:swarmId/results', async (req, res) => {
+      try {
+        if (!this.orchestrator) {
+          return res.status(503).json({ ok: false, error: 'Orchestrator not available' });
+        }
+
+        const result = await this.orchestrator.aggregateResults(req.params.swarmId);
+
+        res.json({ ok: result.success, data: result });
+      } catch (error) {
+        logger.error('Orchestrator error:', error);
+        res.status(500).json({ ok: false, error: error.message });
+      }
+    });
+
+    // Orchestrator: Cancel swarm
+    this.app.post('/api/orchestrator/swarm/:swarmId/cancel', async (req, res) => {
+      try {
+        if (!this.orchestrator) {
+          return res.status(503).json({ ok: false, error: 'Orchestrator not available' });
+        }
+
+        const result = await this.orchestrator.cancelSwarm(
+          req.params.swarmId,
+          req.body?.reason || 'user_requested'
+        );
+
+        res.json({ ok: result.success, data: result });
+      } catch (error) {
+        logger.error('Orchestrator error:', error);
+        res.status(500).json({ ok: false, error: error.message });
+      }
     });
 
     // Telegram webhook - always register the route
