@@ -55,6 +55,50 @@ Per MASTER_SPEC §57, Phase 1 requires 10 hardening items:
 - ✅ Credential detection via environment variables
 - ⚠️ Mock implementations (real provider client initialization needed in Phase 2)
 
+**4. Media Abstraction** (`src/core/media-abstraction.js`) — Phase 1.4
+- ✅ Image generation (Replicate, Midjourney)
+- ✅ Text-to-speech (ElevenLabs, Google TTS, Deepgram)
+- ✅ Speech-to-text (Deepgram, Google STT, OpenAI Whisper)
+- ✅ Video processing (generate, edit, analyze, caption)
+- ✅ Provider fallback chains per media type
+- ✅ Format conversion and optimization stubs
+- ✅ Media status reporting and provider checks
+- 🔧 Database methods stub: none (all in-memory)
+
+**5. Job Queue** (`src/core/job-queue.js`) — Phase 1.5
+- ✅ Durable job queue with in-memory cache + DB backing
+- ✅ Job lifecycle management (queued | started | completed | failed | retrying)
+- ✅ Exponential backoff retry logic with configurable max attempts
+- ✅ Priority-based job ordering (normal, high, low)
+- ✅ Queue statistics and status reporting
+- ✅ Dead letter queue (DLQ) for failed jobs
+- ✅ Job result and error tracking
+- ✅ Automatic cleanup of old jobs (configurable retention)
+- 🔧 Database methods stub: `db.createJob()`, `db.getJob()`, `db.updateJob()`, `db.deleteJob()`, `db.getPendingJobs()`
+
+**6. Agent Mailbox** (`src/core/agent-mailbox.js`) — Phase 1.6
+- ✅ Bidirectional inter-agent messaging
+- ✅ Message types (request, response, state_update, error, notification)
+- ✅ Message routing and delivery per agent
+- ✅ Message queue per agent (unread, read, processed)
+- ✅ Conversation threading (messages and replies)
+- ✅ Broadcast messaging to multiple agents
+- ✅ Message history and audit trail
+- ✅ Automatic cleanup of old messages
+- 🔧 Database methods stub: `db.createMessage()`, `db.getMessage()`, `db.updateMessageStatus()`, `db.deleteMessage()`, `db.getUnprocessedMessages()`
+
+**7. Planning DAG Executor** (`src/core/planning-dag.js`) — Phase 1.7
+- ✅ Workflow definition as Directed Acyclic Graph (DAG)
+- ✅ Step management and dependency tracking
+- ✅ Cycle detection (prevents invalid workflows)
+- ✅ Topological sort for execution order generation
+- ✅ Parallel and sequential step support (via dependency order)
+- ✅ Execution state tracking and result collection
+- ✅ Conditional step execution (condition field)
+- ✅ Error handling strategies (fail | skip | retry | fallback)
+- ✅ Workflow validation (completeness, reachability, cycles)
+- 🔧 Database methods stub: none (all in-memory)
+
 ### Key Design Decisions
 
 **1. Capability Registry vs. Tool Registry Separation**
@@ -106,18 +150,22 @@ All three modules define methods they need from `db` layer:
 4. **Job Queue** (Phase 1.5): Will use tool registry for tool invocation
 5. **Agent Mailbox** (Phase 1.6): Will check capabilities before routing inter-agent messages
 
-### Next Steps (Phase 1)
+### Remaining Phase 1 Items
 
-1. **Database Layer**: Create capabilities and tools tables in Supabase schema
-2. **Server Integration**: Wire registries into server.js initialization
-3. **Bootstrap Data**: Seed registries with existing 17 agents + tools (from AGENTS.md catalog)
-4. **Media Abstraction** (Phase 1.4): Abstract image generation, speech synthesis
-5. **Job Queue** (Phase 1.5): Bull.js queue with persistent state
-6. **Agent Mailbox** (Phase 1.6): Bidirectional inter-agent messaging
-7. **Planning DAG** (Phase 1.7): Multi-step workflow executor
-8. **Agent Identities** (Phase 1.8): Versioned agent objects and deployment tracking
-9. **Audit Logs** (Phase 1.9): Immutable append-only compliance table
-10. **Policy Layer** (Phase 1.10): Budget gates, approval thresholds, feature flags
+1. **Agent Identities** (Phase 1.8): Versioned agent objects and deployment tracking
+2. **Shared Audit Logs** (Phase 1.9): Immutable append-only compliance table
+3. **Policy/Approval Layer** (Phase 1.10): Budget gates, approval thresholds, feature flags
+
+### Next Steps (Post-Foundation)
+
+1. **Database Schema**: Create 10+ tables in Supabase for registries + job queue + mailbox
+2. **Server Integration**: Wire all 7 registries into server.js initialization sequence
+3. **Bootstrap Data**: Seed capabilities/tools with existing 17 agents (from AGENTS.md catalog)
+4. **Integration Testing**: Test registry lookups, job queue flow, mailbox delivery
+5. **Orchestrator Rewiring**: Connect Agent Orchestrator to capability registry for swarm spawning
+6. **Agent Identities** (Phase 1.8): Wrap agents in identity objects with versioning
+7. **Audit Logs** (Phase 1.9): Create immutable audit table; connect to all major operations
+8. **Policy Layer** (Phase 1.10): Integrate budget controller + approval gates into execution
 
 ### Testing Strategy
 
