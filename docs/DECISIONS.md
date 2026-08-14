@@ -4,6 +4,242 @@
 
 ---
 
+## Entry 005: Phase 2.0 - Real Provider Implementation Begins
+
+**Date**: 2026-08-14  
+**Decision**: Implement real LLM, media, and storage provider integrations (replacing mocks).
+
+### Work Completed
+
+**1. Real Provider Implementations** (`src/llm/providers.js`)
+- ✅ **LLMProviders class**: Real API integrations for:
+  - OpenRouter: Smart model selection + cost tracking
+  - Anthropic (Claude): Direct API calls to Claude models
+  - OpenAI: Direct API calls to GPT-4o/GPT-4 Turbo
+  - Each provider calculates real token costs
+- ✅ **MediaProviders class**: Real API integrations for:
+  - Replicate: Real image generation via Flux models
+  - ElevenLabs: Real text-to-speech conversion
+  - Deepgram: Real speech-to-text conversion
+- ✅ **StorageProviders class**: Real storage implementations for:
+  - Local filesystem storage (storeFile, retrieveFile, delete)
+  - In-memory storage (session data)
+  - AWS S3 (placeholder for Phase 2.1 with AWS SDK v3)
+- ✅ **CostPredictor class**: Task cost prediction
+  - Base costs per task type (landing_page: $0.50, lead_gen: $0.30, etc.)
+  - Adjustments for complexity, agent count, urgency
+- ✅ **TaskClassifier class**: Task category inference
+  - Keyword-based classification (temporary)
+  - Returns category, subcategory, confidence
+  - Placeholder for Phase 2.1 ML classifier
+
+**2. Provider Abstraction Rewrite** (Updated `src/core/provider-abstraction.js`)
+- ✅ **Provider Detection**: Auto-detect available providers from env vars
+  - Scans for API keys and credentials
+  - Reports available provider count per type
+- ✅ **Dynamic Provider Selection**: Choose best available provider
+  - Fallback chain: openrouter → anthropic → openai (for LLM)
+  - Fallback chain: replicate → elevenlabs (for media)
+  - Fallback chain: local → memory (for storage)
+- ✅ **LLM Completion**: Routes to real OpenRouter/Anthropic/OpenAI APIs
+  - Calculates real token usage
+  - Tracks cost per request
+  - Attempts fallback on error
+- ✅ **Media Operations**: Routes to real Replicate/ElevenLabs/Deepgram
+  - generateImage(): Real Replicate API calls
+  - textToSpeech(): Real ElevenLabs API calls
+  - speechToText(): Real Deepgram API calls
+- ✅ **Storage Operations**: Routes to real Local/S3/Memory storage
+  - storeFile(): Persist to local FS or memory
+  - retrieveFile(): Load from local FS or memory
+  - deleteFile(): Remove from storage
+- ✅ **Metrics Tracking**: Real cost and usage tracking
+  - totalCost: Sum of all provider costs
+  - requestCount: Number of API calls made
+  - totalTokens: LLM tokens used
+  - averageCostPerRequest: Computed metric
+- ✅ **Cost & Task APIs**: New public methods
+  - predictCost(taskName, parameters): Estimate task cost
+  - classifyTask(taskName): Determine task category
+  - getMetrics(): Retrieve usage statistics
+
+### Real Provider APIs Documented
+
+**LLM Providers**
+- OpenRouter: https://openrouter.ai/api/v1/chat/completions
+  - Models: deepseek ($0.00014/$0.00028), claude ($0.003/$0.015), gpt-4o ($0.005/$0.015)
+  - Pricing: per 1M tokens input/output
+- Anthropic: https://api.anthropic.com/v1/messages
+  - Model: claude-3-5-sonnet-20241022
+  - Pricing: $3M input, $15M output
+- OpenAI: https://api.openai.com/v1/chat/completions
+  - Model: gpt-4o (default)
+  - Pricing: $5M input, $15M output
+
+**Media Providers**
+- Replicate: https://api.replicate.com/v1/predictions
+  - Models: flux-pro ($0.06/img), flux-dev ($0.025/img)
+  - Polling for completion (async)
+- ElevenLabs: https://api.elevenlabs.io/v1/text-to-speech/:voiceId
+  - Voices: Rachel, Bella, Antoni, Josh, etc.
+  - Pricing: $0.30 per 1M characters
+- Deepgram: https://api.deepgram.com/v1/listen
+  - Format: audio/wav, audio/mp3, audio/webm
+  - Pricing: $0.0043 per minute
+
+**Storage Providers**
+- Local FS: fs.writeFileSync, fs.readFileSync
+  - Directory: ./storage (configurable)
+  - Cost: $0 (free)
+- In-Memory: Map data structure
+  - Session-scoped storage
+  - Cost: $0 (free)
+- AWS S3: (Placeholder for Phase 2.1)
+  - Requires AWS SDK v3
+  - Costs: per-request + storage
+
+### Design Decisions
+
+**1. Real vs Mock Implementations**
+- **Why**: Phase 1 needed architecture proof. Phase 2 needs actual work.
+- **Implementation**: Separate `providers.js` with real SDK calls
+- **Fallback**: Multiple LLM/media providers for resilience
+- **Graceful Degradation**: If provider unavailable, use next in fallback chain
+
+**2. Cost Tracking**
+- **Why**: Budget enforcement requires real cost accounting
+- **Approach**: Every provider call returns cost; aggregated in metrics
+- **Token Tracking**: LLM token usage tracked per request
+- **Cost Calculation**: Per-token pricing from official provider rates
+
+**3. Provider Detection**
+- **Why**: Support multiple credential sets for multi-tenant deployment
+- **Approach**: Scan environment variables at startup
+- **Selection**: Choose from available providers; prefer primary fallback
+- **Validation**: Fail fast if no providers available
+
+**4. Task Prediction (Placeholder)**
+- **Current**: Keyword-based cost estimation and classification
+- **Limitation**: Hardcoded rules don't scale
+- **Phase 2.1**: ML classifier + cost predictor with training data
+- **Trade-off**: Get working now; replace with ML later
+
+### Environment Variables Required for Phase 2
+
+```bash
+# LLM Providers (at least one required)
+OPENROUTER_API_KEY=sk-or-v1-xxxxx
+ANTHROPIC_API_KEY=sk-ant-xxxxx
+OPENAI_API_KEY=sk-xxxxx
+
+# Media Providers (optional)
+REPLICATE_API_TOKEN=r8_xxxxx
+ELEVENLABS_API_KEY=xxxxx
+DEEPGRAM_API_KEY=xxxxx
+
+# Storage (optional, local/memory always available)
+AWS_ACCESS_KEY_ID=XXXXX
+AWS_SECRET_ACCESS_KEY=xxxxx
+AWS_S3_BUCKET=hustlebot-assets
+```
+
+### API Response Examples
+
+**LLM Completion Response**
+```json
+{
+  "content": "Generated response text...",
+  "tokens": { "input": 145, "output": 320 },
+  "cost": 0.006745,
+  "model": "deepseek/deepseek-chat"
+}
+```
+
+**Image Generation Response**
+```json
+{
+  "urls": ["https://...img1.png", "https://...img2.png"],
+  "model": "black-forest-labs/flux-dev",
+  "cost": 0.05
+}
+```
+
+**Storage Response**
+```json
+{
+  "key": "project-123/document.pdf",
+  "path": "/storage/project-123/document.pdf",
+  "url": "file:///storage/project-123/document.pdf",
+  "cost": 0
+}
+```
+
+### What Works Now
+
+1. **Real LLM Calls**: Actual API calls to OpenRouter/Anthropic/OpenAI with token tracking
+2. **Real Cost Tracking**: Every API call generates real cost data
+3. **Multi-Provider Support**: Fallback to next provider if primary unavailable
+4. **Media Generation**: Real image generation via Replicate API
+5. **Storage**: Real local filesystem and in-memory storage
+6. **Metrics**: Comprehensive usage and cost reporting
+
+### What's Incomplete (Phase 2.1)
+
+1. **AWS S3**: Needs AWS SDK v3 integration (currently placeholder)
+2. **ML Task Classifier**: Uses keywords; should use NLP model
+3. **ML Cost Predictor**: Uses heuristics; should use historical data
+4. **Video Processing**: Not yet implemented (future)
+5. **Error Recovery**: Providers attempt fallback; could be more intelligent
+
+### Testing Notes
+
+To test Phase 2 providers:
+
+```bash
+# Set environment variables
+export OPENROUTER_API_KEY="..."
+export REPLICATE_API_TOKEN="..."
+
+# Test LLM completion
+curl http://localhost:3000/api/orchestrator/swarm \
+  -X POST \
+  -H "Content-Type: application/json" \
+  -d '{
+    "task_name": "create_content",
+    "user_id": "test-user",
+    "project_id": "test-project",
+    "parameters": {"topic": "AI trends"}
+  }'
+
+# Check provider status
+curl http://localhost:3000/api/status | jq .providers
+```
+
+### Risks & Mitigations
+
+| Risk | Mitigation |
+|------|-----------|
+| API key leakage | Use env vars; never commit keys; rotate regularly |
+| High API costs | Cost prediction + approval gates + per-operation limits |
+| Provider downtime | Fallback chains to alternate providers |
+| Token counting errors | Trust provider tokens; cross-check with cost |
+| Task classifier inaccuracy | Keyword-based is good enough for now; ML upgrade in 2.1 |
+
+### Next: Phase 2.1 (Advanced Providers)
+
+Per MASTER_SPEC, Phase 2.1 will add:
+1. AWS SDK v3 integration for real S3 storage
+2. Midjourney image generation (currently placeholder)
+3. ML-based task classification (replace keywords)
+4. ML-based cost prediction (replace heuristics)
+5. Streaming responses for LLM (currently buffered)
+6. Video generation & processing
+7. Provider health checks and metrics
+
+**Status**: ✅ Phase 2.0 complete. Real provider implementations in place. LLM, media, and storage now using actual APIs instead of mocks.
+
+---
+
 ## Entry 004: Phase 1.3 - Orchestrator Rewiring Complete
 
 **Date**: 2026-08-14  

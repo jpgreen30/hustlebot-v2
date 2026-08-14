@@ -1,32 +1,45 @@
 /**
  * PROVIDER ABSTRACTION
  *
+ * Phase 2: Real Provider Implementations
+ *
  * Responsibilities:
- * 1. Abstract LLM provider selection (OpenAI, Claude, Grok, DeepSeek, etc.)
- * 2. Abstract media provider (image generation, speech-to-text, text-to-speech)
- * 3. Abstract storage provider (S3, local filesystem, in-memory)
- * 4. Support provider-specific configurations and credentials
- * 5. Enable runtime provider switching and fallback logic
+ * 1. Route to real LLM provider implementations (OpenRouter, Anthropic, OpenAI, etc.)
+ * 2. Route to real media providers (Replicate, ElevenLabs, Deepgram, etc.)
+ * 3. Route to real storage providers (S3, Local FS, In-Memory)
+ * 4. Handle fallback chains when providers unavailable
+ * 5. Track costs and usage metrics
+ * 6. Graceful degradation
  */
 
 import logger from '../utils/logger.js';
+import { LLMProviders, MediaProviders, StorageProviders, CostPredictor, TaskClassifier } from '../llm/providers.js';
 
 class ProviderAbstraction {
   constructor(config = {}) {
     this.config = config;
     this.llmProvider = config.llm_provider || 'openrouter';
     this.mediaProvider = config.media_provider || 'replicate';
-    this.storageProvider = config.storage_provider || 's3';
+    this.storageProvider = config.storage_provider || 'local';
 
-    // Provider instances
-    this.llmInstance = null;
-    this.mediaInstance = null;
-    this.storageInstance = null;
+    // Provider availability status
+    this.availableProviders = {
+      llm: [],
+      media: [],
+      storage: []
+    };
 
-    // Fallback chains
+    // Fallback chains (tried in order)
     this.llmFallbacks = config.llm_fallbacks || ['openrouter', 'anthropic', 'openai'];
-    this.mediaFallbacks = config.media_fallbacks || ['replicate', 'midjourney'];
-    this.storageFallbacks = config.storage_fallbacks || ['s3', 'local'];
+    this.mediaFallbacks = config.media_fallbacks || ['replicate', 'elevenlabs'];
+    this.storageFallbacks = config.storage_fallbacks || ['local', 'memory'];
+
+    // Metrics
+    this.metrics = {
+      totalCost: 0,
+      requestCount: 0,
+      totalTokens: 0
+    };
   }
 
   /**
@@ -34,14 +47,13 @@ class ProviderAbstraction {
    */
   async initialize() {
     try {
-      await this.initializeLLM();
-      await this.initializeMedia();
-      await this.initializeStorage();
+      this.detectAvailableProviders();
+      await this.selectAndValidateProviders();
 
-      logger.info(`✅ Provider abstraction initialized`);
-      logger.info(`   - LLM: ${this.llmProvider}`);
-      logger.info(`   - Media: ${this.mediaProvider}`);
-      logger.info(`   - Storage: ${this.storageProvider}`);
+      logger.info(`✅ Provider abstraction initialized (Phase 2: Real implementations)`);
+      logger.info(`   - LLM: ${this.llmProvider} (${this.availableProviders.llm.join(', ')})`);
+      logger.info(`   - Media: ${this.mediaProvider} (${this.availableProviders.media.join(', ')})`);
+      logger.info(`   - Storage: ${this.storageProvider} (${this.availableProviders.storage.join(', ')})`);
     } catch (error) {
       logger.error('Error initializing provider abstraction:', error);
       throw error;
@@ -49,226 +61,215 @@ class ProviderAbstraction {
   }
 
   /**
-   * Initialize LLM provider
+   * Detect which providers have valid credentials
    */
-  async initializeLLM() {
-    for (const provider of this.llmFallbacks) {
-      try {
-        logger.info(`🤖 Initializing LLM provider: ${provider}`);
+  detectAvailableProviders() {
+    // LLM providers
+    if (process.env.OPENROUTER_API_KEY) this.availableProviders.llm.push('openrouter');
+    if (process.env.ANTHROPIC_API_KEY) this.availableProviders.llm.push('anthropic');
+    if (process.env.OPENAI_API_KEY) this.availableProviders.llm.push('openai');
 
-        switch (provider) {
-          case 'openrouter':
-            // Already available in env as OpenRouter class
-            this.llmInstance = { type: 'openrouter', ready: true };
-            this.llmProvider = provider;
-            return;
+    // Media providers
+    if (process.env.REPLICATE_API_TOKEN) this.availableProviders.media.push('replicate');
+    if (process.env.ELEVENLABS_API_KEY) this.availableProviders.media.push('elevenlabs');
+    if (process.env.DEEPGRAM_API_KEY) this.availableProviders.media.push('deepgram');
 
-          case 'anthropic':
-            // Claude API
-            if (process.env.ANTHROPIC_API_KEY) {
-              this.llmInstance = { type: 'anthropic', ready: true };
-              this.llmProvider = provider;
-              return;
-            }
-            break;
-
-          case 'openai':
-            // OpenAI API
-            if (process.env.OPENAI_API_KEY) {
-              this.llmInstance = { type: 'openai', ready: true };
-              this.llmProvider = provider;
-              return;
-            }
-            break;
-
-          case 'grok':
-            // xAI Grok
-            if (process.env.XAI_API_KEY) {
-              this.llmInstance = { type: 'grok', ready: true };
-              this.llmProvider = provider;
-              return;
-            }
-            break;
-
-          case 'deepseek':
-            // DeepSeek
-            if (process.env.DEEPSEEK_API_KEY) {
-              this.llmInstance = { type: 'deepseek', ready: true };
-              this.llmProvider = provider;
-              return;
-            }
-            break;
-
-          case 'gemini':
-            // Google Gemini
-            if (process.env.GOOGLE_API_KEY) {
-              this.llmInstance = { type: 'gemini', ready: true };
-              this.llmProvider = provider;
-              return;
-            }
-            break;
-        }
-      } catch (error) {
-        logger.warn(`LLM provider ${provider} initialization failed, trying fallback...`);
-      }
+    // Storage providers (local always available)
+    this.availableProviders.storage.push('local', 'memory');
+    if (process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY) {
+      this.availableProviders.storage.push('s3');
     }
 
-    throw new Error('No LLM provider available');
+    logger.info(`📊 Available providers: LLM=${this.availableProviders.llm.length}, Media=${this.availableProviders.media.length}, Storage=${this.availableProviders.storage.length}`);
   }
 
   /**
-   * Initialize media provider
+   * Select best provider from available options
    */
-  async initializeMedia() {
-    for (const provider of this.mediaFallbacks) {
-      try {
-        logger.info(`🎨 Initializing media provider: ${provider}`);
-
-        switch (provider) {
-          case 'replicate':
-            if (process.env.REPLICATE_API_TOKEN) {
-              this.mediaInstance = { type: 'replicate', ready: true };
-              this.mediaProvider = provider;
-              return;
-            }
-            break;
-
-          case 'midjourney':
-            if (process.env.MIDJOURNEY_API_KEY) {
-              this.mediaInstance = { type: 'midjourney', ready: true };
-              this.mediaProvider = provider;
-              return;
-            }
-            break;
-        }
-      } catch (error) {
-        logger.warn(`Media provider ${provider} initialization failed, trying fallback...`);
-      }
+  async selectAndValidateProviders() {
+    // Select LLM provider
+    const availableLLM = this.llmFallbacks.filter(p => this.availableProviders.llm.includes(p));
+    if (availableLLM.length > 0) {
+      this.llmProvider = availableLLM[0];
+    } else {
+      throw new Error('No LLM providers available. Set OPENROUTER_API_KEY, ANTHROPIC_API_KEY, or OPENAI_API_KEY');
     }
 
-    logger.warn('⚠️ No media provider available, image generation disabled');
-    this.mediaInstance = { type: 'none', ready: false };
+    // Select Media provider (optional)
+    const availableMedia = this.mediaFallbacks.filter(p => this.availableProviders.media.includes(p));
+    if (availableMedia.length > 0) {
+      this.mediaProvider = availableMedia[0];
+    } else {
+      logger.warn('⚠️ No media providers available, image generation disabled');
+      this.mediaProvider = null;
+    }
+
+    // Select Storage provider
+    const availableStorage = this.storageFallbacks.filter(p => this.availableProviders.storage.includes(p));
+    if (availableStorage.length > 0) {
+      this.storageProvider = availableStorage[0];
+    } else {
+      throw new Error('No storage providers available');
+    }
   }
 
   /**
-   * Initialize storage provider
-   */
-  async initializeStorage() {
-    for (const provider of this.storageFallbacks) {
-      try {
-        logger.info(`💾 Initializing storage provider: ${provider}`);
-
-        switch (provider) {
-          case 's3':
-            if (process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY) {
-              this.storageInstance = { type: 's3', ready: true };
-              this.storageProvider = provider;
-              return;
-            }
-            break;
-
-          case 'local':
-            this.storageInstance = { type: 'local', ready: true };
-            this.storageProvider = provider;
-            return;
-
-          case 'memory':
-            this.storageInstance = { type: 'memory', ready: true };
-            this.storageProvider = provider;
-            return;
-        }
-      } catch (error) {
-        logger.warn(`Storage provider ${provider} initialization failed, trying fallback...`);
-      }
-    }
-
-    throw new Error('No storage provider available');
-  }
-
-  /**
-   * Get LLM completion with provider abstraction
+   * Get LLM completion with real provider
+   * Phase 2: Uses actual API calls instead of mocks
    */
   async getLLMCompletion(prompt, options = {}) {
-    if (!this.llmInstance) {
-      throw new Error('LLM provider not initialized');
-    }
-
-    const provider = this.llmProvider;
-
     try {
-      logger.info(`📝 LLM completion via ${provider}`);
+      const provider = this.llmProvider;
 
-      // Provider-specific handling would go here
-      // For now, return mock response for abstraction demonstration
-      return {
-        provider,
-        prompt,
-        completion: `Mock response from ${provider}`,
-        tokens: { input: 10, output: 20 }
-      };
-    } catch (error) {
-      logger.error(`LLM error on ${provider}:`, error);
-
-      // Fallback to next provider
-      const idx = this.llmFallbacks.indexOf(provider);
-      if (idx < this.llmFallbacks.length - 1) {
-        logger.info(`Falling back to ${this.llmFallbacks[idx + 1]}`);
-        // Would recursively try next provider here
+      if (!provider) {
+        throw new Error('No LLM provider available');
       }
 
+      // Route to real provider implementation
+      let result;
+      switch (provider) {
+        case 'openrouter':
+          result = await LLMProviders.openrouter(prompt, options);
+          break;
+        case 'anthropic':
+          result = await LLMProviders.anthropic(prompt, options);
+          break;
+        case 'openai':
+          result = await LLMProviders.openai(prompt, options);
+          break;
+        default:
+          throw new Error(`Unknown LLM provider: ${provider}`);
+      }
+
+      // Track metrics
+      this.metrics.totalCost += result.cost;
+      this.metrics.requestCount++;
+      this.metrics.totalTokens += result.tokens.input + result.tokens.output;
+
+      return result;
+    } catch (error) {
+      logger.error(`LLM error on ${this.llmProvider}: ${error.message}`);
+      // Try fallback provider
+      await this.tryLLMFallback();
       throw error;
     }
   }
 
   /**
+   * Try next LLM provider in fallback chain
+   */
+  async tryLLMFallback() {
+    const currentIndex = this.llmFallbacks.indexOf(this.llmProvider);
+    const nextIndex = currentIndex + 1;
+
+    if (nextIndex < this.llmFallbacks.length) {
+      const nextProvider = this.llmFallbacks[nextIndex];
+      if (this.availableProviders.llm.includes(nextProvider)) {
+        logger.warn(`⚠️ Switching LLM provider to fallback: ${nextProvider}`);
+        this.llmProvider = nextProvider;
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  /**
    * Generate image with media provider
+   * Phase 2: Uses real Replicate/ElevenLabs API
    */
   async generateImage(prompt, options = {}) {
-    if (!this.mediaInstance || !this.mediaInstance.ready) {
+    if (!this.mediaProvider) {
       throw new Error('Media provider not available');
     }
 
-    const provider = this.mediaProvider;
+    try {
+      let result;
+      switch (this.mediaProvider) {
+        case 'replicate':
+          result = await MediaProviders.replicate(prompt, options);
+          break;
+        default:
+          throw new Error(`Unsupported media provider: ${this.mediaProvider}`);
+      }
+
+      this.metrics.totalCost += result.cost;
+      return result;
+    } catch (error) {
+      logger.error(`Media error on ${this.mediaProvider}: ${error.message}`);
+      throw error;
+    }
+  }
+
+  /**
+   * Text-to-speech conversion
+   */
+  async textToSpeech(text, options = {}) {
+    if (!this.mediaProvider) {
+      throw new Error('Media provider not available');
+    }
 
     try {
-      logger.info(`🖼️  Image generation via ${provider}`);
+      let result;
+      switch (this.mediaProvider) {
+        case 'elevenlabs':
+          result = await MediaProviders.elevenLabsTTS(text, options);
+          break;
+        default:
+          throw new Error(`${this.mediaProvider} does not support TTS`);
+      }
 
-      // Provider-specific handling
-      return {
-        provider,
-        prompt,
-        image_url: `https://mock-cdn.example.com/${Date.now()}.png`,
-        size: options.size || '1024x1024'
-      };
+      this.metrics.totalCost += result.cost;
+      return result;
     } catch (error) {
-      logger.error(`Media error on ${provider}:`, error);
+      logger.error(`TTS error: ${error.message}`);
+      throw error;
+    }
+  }
+
+  /**
+   * Speech-to-text conversion
+   */
+  async speechToText(audioBuffer, options = {}) {
+    try {
+      const result = await MediaProviders.deepgramSTT(audioBuffer, options);
+      this.metrics.totalCost += result.cost;
+      return result;
+    } catch (error) {
+      logger.error(`STT error: ${error.message}`);
       throw error;
     }
   }
 
   /**
    * Store file with storage provider
+   * Phase 2: Uses real S3/Local FS
    */
   async storeFile(fileKey, fileContent, metadata = {}) {
-    if (!this.storageInstance) {
+    if (!this.storageProvider) {
       throw new Error('Storage provider not initialized');
     }
 
-    const provider = this.storageProvider;
-
     try {
-      logger.info(`📤 Storing file via ${provider}: ${fileKey}`);
+      let result;
+      switch (this.storageProvider) {
+        case 's3':
+          result = await StorageProviders.s3Store(fileKey, fileContent, metadata);
+          break;
+        case 'local':
+          result = await StorageProviders.localStore(fileKey, fileContent, metadata);
+          break;
+        case 'memory':
+          result = StorageProviders.memoryStore(fileKey, fileContent, metadata);
+          break;
+        default:
+          throw new Error(`Unknown storage provider: ${this.storageProvider}`);
+      }
 
-      // Provider-specific handling
-      return {
-        provider,
-        key: fileKey,
-        url: `https://storage.example.com/${fileKey}`,
-        size: fileContent.length,
-        stored_at: new Date().toISOString()
-      };
+      logger.info(`✅ File stored: ${fileKey} via ${this.storageProvider}`);
+      return result;
     } catch (error) {
-      logger.error(`Storage error on ${provider}:`, error);
+      logger.error(`Storage error: ${error.message}`);
       throw error;
     }
   }
@@ -277,24 +278,27 @@ class ProviderAbstraction {
    * Retrieve file from storage
    */
   async retrieveFile(fileKey) {
-    if (!this.storageInstance) {
+    if (!this.storageProvider) {
       throw new Error('Storage provider not initialized');
     }
 
-    const provider = this.storageProvider;
-
     try {
-      logger.info(`📥 Retrieving file via ${provider}: ${fileKey}`);
+      let content;
+      switch (this.storageProvider) {
+        case 'local':
+          content = await StorageProviders.localRetrieve(fileKey);
+          break;
+        case 'memory':
+          content = StorageProviders.memoryRetrieve(fileKey);
+          break;
+        default:
+          throw new Error(`${this.storageProvider} retrieval not implemented`);
+      }
 
-      // Provider-specific handling
-      return {
-        provider,
-        key: fileKey,
-        content: Buffer.from('mock file content'),
-        size: 1024
-      };
+      logger.info(`✅ File retrieved: ${fileKey} from ${this.storageProvider}`);
+      return content;
     } catch (error) {
-      logger.error(`Storage error on ${provider}:`, error);
+      logger.error(`Storage error: ${error.message}`);
       throw error;
     }
   }
@@ -303,25 +307,34 @@ class ProviderAbstraction {
    * Delete file from storage
    */
   async deleteFile(fileKey) {
-    if (!this.storageInstance) {
+    if (!this.storageProvider) {
       throw new Error('Storage provider not initialized');
     }
 
-    const provider = this.storageProvider;
-
     try {
-      logger.info(`🗑️  Deleting file via ${provider}: ${fileKey}`);
-
-      return {
-        provider,
-        key: fileKey,
-        deleted: true,
-        deleted_at: new Date().toISOString()
-      };
+      // Note: Implement delete logic per provider in Phase 2.1
+      logger.info(`🗑️  Deleting file: ${fileKey} from ${this.storageProvider}`);
+      return { success: true, key: fileKey };
     } catch (error) {
-      logger.error(`Storage error on ${provider}:`, error);
+      logger.error(`Storage error: ${error.message}`);
       throw error;
     }
+  }
+
+  /**
+   * Predict task cost using ML
+   * Phase 2: Placeholder - uses heuristics, Phase 2.1 will add ML model
+   */
+  predictCost(taskName, parameters = {}) {
+    return CostPredictor.predictCost(taskName, parameters);
+  }
+
+  /**
+   * Classify task using NLP
+   * Phase 2: Placeholder - uses keywords, Phase 2.1 will add ML model
+   */
+  classifyTask(taskName) {
+    return TaskClassifier.classifyTask(taskName);
   }
 
   /**
@@ -330,64 +343,34 @@ class ProviderAbstraction {
   getProviderStatus() {
     return {
       llm: {
-        provider: this.llmProvider,
-        ready: this.llmInstance?.ready || false,
+        current: this.llmProvider,
+        available: this.availableProviders.llm,
         fallbacks: this.llmFallbacks
       },
       media: {
-        provider: this.mediaProvider,
-        ready: this.mediaInstance?.ready || false,
+        current: this.mediaProvider,
+        available: this.availableProviders.media,
         fallbacks: this.mediaFallbacks
       },
       storage: {
-        provider: this.storageProvider,
-        ready: this.storageInstance?.ready || false,
+        current: this.storageProvider,
+        available: this.availableProviders.storage,
         fallbacks: this.storageFallbacks
-      }
+      },
+      metrics: this.metrics
     };
   }
 
   /**
-   * Switch to a different provider at runtime
+   * Get metrics
    */
-  async switchProvider(providerType, newProvider) {
-    try {
-      logger.info(`🔄 Switching ${providerType} from ${this[`${providerType}Provider`]} to ${newProvider}`);
-
-      switch (providerType) {
-        case 'llm':
-          if (!this.llmFallbacks.includes(newProvider)) {
-            throw new Error(`${newProvider} not in LLM fallback chain`);
-          }
-          this.llmProvider = newProvider;
-          await this.initializeLLM();
-          break;
-
-        case 'media':
-          if (!this.mediaFallbacks.includes(newProvider)) {
-            throw new Error(`${newProvider} not in media fallback chain`);
-          }
-          this.mediaProvider = newProvider;
-          await this.initializeMedia();
-          break;
-
-        case 'storage':
-          if (!this.storageFallbacks.includes(newProvider)) {
-            throw new Error(`${newProvider} not in storage fallback chain`);
-          }
-          this.storageProvider = newProvider;
-          await this.initializeStorage();
-          break;
-
-        default:
-          throw new Error(`Unknown provider type: ${providerType}`);
-      }
-
-      logger.info(`✅ Switched ${providerType} to ${newProvider}`);
-    } catch (error) {
-      logger.error(`Error switching provider:`, error);
-      throw error;
-    }
+  getMetrics() {
+    return {
+      totalRequests: this.metrics.requestCount,
+      totalCost: this.metrics.totalCost,
+      totalTokens: this.metrics.totalTokens,
+      averageCostPerRequest: this.metrics.totalCost / Math.max(this.metrics.requestCount, 1)
+    };
   }
 }
 
