@@ -13,12 +13,14 @@ import express from 'express';
 import helmet from 'helmet';
 import cors from 'cors';
 import logger from './utils/logger.js';
+import { ProviderAbstraction } from './core/provider-abstraction.js';
 
 class HustleBotServer {
   constructor() {
     this.app = null;
     this.server = null;
     this.port = process.env.PORT || 3000;
+    this.providers = null;
   }
 
   async initialize() {
@@ -65,6 +67,16 @@ class HustleBotServer {
         }
       } catch (error) {
         logger.warn('⚠️  Deepgram initialization failed, continuing:', error.message);
+      }
+
+      // Initialize Provider Abstraction (storage + streaming)
+      try {
+        logger.info('🔌 Initializing provider abstraction...');
+        this.providers = new ProviderAbstraction();
+        await this.providers.initialize();
+        logger.info('✅ Provider abstraction ready');
+      } catch (error) {
+        logger.warn('⚠️  Provider abstraction initialization failed, continuing:', error.message);
       }
 
       // Try to initialize Telegram bot (graceful failure)
@@ -128,6 +140,9 @@ class HustleBotServer {
 
     // Status endpoint
     this.app.get('/api/status', (req, res) => {
+      const providerStatus = this.providers ? this.providers.getProviderStatus() : null;
+      const storageStatus = this.providers ? this.providers.getProviderStatus().storage.status : null;
+
       res.json({
         status: 'running',
         version: '2.0.0',
@@ -135,16 +150,128 @@ class HustleBotServer {
         llm: this.llm ? 'ready' : 'unavailable',
         telegram: this.bot ? 'connected' : 'disconnected',
         voice: this.voice ? 'ready' : 'unavailable',
+        providers: providerStatus,
+        storage: storageStatus,
         bot_token_set: !!process.env.TELEGRAM_BOT_TOKEN,
         deepgram_key_set: !!process.env.DEEPGRAM_API_KEY,
         features: {
           text_chat: !!this.bot,
           ai_responses: !!this.llm,
           voice_messages: !!this.voice,
-          image_generation: !!this.llm
+          image_generation: !!this.llm,
+          streaming: !!this.providers,
+          file_storage: !!this.providers
         },
         timestamp: new Date().toISOString()
       });
+    });
+
+    // Streaming LLM endpoint
+    this.app.post('/api/stream', async (req, res) => {
+      try {
+        if (!this.providers) {
+          return res.status(503).json({ error: 'Provider abstraction not initialized' });
+        }
+
+        const { prompt, provider, options } = req.body;
+
+        if (!prompt) {
+          return res.status(400).json({ error: 'prompt required' });
+        }
+
+        // Set streaming headers
+        res.setHeader('Content-Type', 'text/event-stream');
+        res.setHeader('Cache-Control', 'no-cache');
+        res.setHeader('Connection', 'keep-alive');
+
+        const selectedProvider = provider || this.providers.llmProvider;
+        const streamOptions = { ...options, provider: selectedProvider };
+
+        try {
+          const streamGenerator = this.providers.getStreamingGenerator(prompt, streamOptions);
+
+          // Stream chunks to client
+          for await (const chunk of streamGenerator) {
+            if (chunk.type === 'chunk') {
+              res.write(`data: ${JSON.stringify(chunk)}\n\n`);
+            } else if (chunk.type === 'complete') {
+              res.write(`data: ${JSON.stringify(chunk)}\n\n`);
+              res.write('data: [DONE]\n\n');
+            } else if (chunk.type === 'error') {
+              res.write(`data: ${JSON.stringify(chunk)}\n\n`);
+            }
+          }
+
+          res.end();
+        } catch (error) {
+          logger.error(`Streaming error: ${error.message}`);
+          res.write(`data: ${JSON.stringify({ type: 'error', error: error.message })}\n\n`);
+          res.end();
+        }
+      } catch (error) {
+        logger.error(`Stream endpoint error: ${error.message}`);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    // File storage endpoint - store file
+    this.app.post('/api/storage/store', async (req, res) => {
+      try {
+        if (!this.providers) {
+          return res.status(503).json({ error: 'Provider abstraction not initialized' });
+        }
+
+        const { key, data, metadata } = req.body;
+
+        if (!key || !data) {
+          return res.status(400).json({ error: 'key and data required' });
+        }
+
+        const result = await this.providers.storeFile(key, data, metadata);
+        res.json(result);
+      } catch (error) {
+        logger.error(`Storage error: ${error.message}`);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    // File storage endpoint - retrieve file
+    this.app.get('/api/storage/retrieve/:key', async (req, res) => {
+      try {
+        if (!this.providers) {
+          return res.status(503).json({ error: 'Provider abstraction not initialized' });
+        }
+
+        const { key } = req.params;
+        const result = await this.providers.retrieveFile(key);
+
+        res.json({
+          key: result.key,
+          size: result.data.length,
+          storage: result.storage,
+          contentType: result.contentType
+        });
+      } catch (error) {
+        logger.error(`Retrieval error: ${error.message}`);
+        res.status(404).json({ error: 'File not found' });
+      }
+    });
+
+    // File storage endpoint - delete file
+    this.app.delete('/api/storage/delete/:key', async (req, res) => {
+      try {
+        if (!this.providers) {
+          return res.status(503).json({ error: 'Provider abstraction not initialized' });
+        }
+
+        const { key } = req.params;
+        const result = await this.providers.deleteFile(key);
+
+        res.json(result);
+      } catch (error) {
+        logger.error(`Delete error: ${error.message}`);
+        res.status(500).json({ error: error.message });
+      }
     });
 
     // Debug endpoint
@@ -183,7 +310,15 @@ class HustleBotServer {
         status: 'running',
         endpoints: {
           health: '/health',
-          status: '/api/status'
+          status: '/api/status',
+          streaming: {
+            stream: 'POST /api/stream'
+          },
+          storage: {
+            store: 'POST /api/storage/store',
+            retrieve: 'GET /api/storage/retrieve/:key',
+            delete: 'DELETE /api/storage/delete/:key'
+          }
         }
       });
     });

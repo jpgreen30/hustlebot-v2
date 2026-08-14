@@ -1,0 +1,105 @@
+# HustleBot v2 - Decision Log
+
+**Format**: Append-only log. Never edit prior entries. Newest entry on top.
+
+---
+
+## Entry 001: Phase 0 Audit Completed
+
+**Date**: 2026-08-14  
+**Decision**: Conducted comprehensive Phase 0 audit. Established baseline documentation.
+
+### What Was Audited
+
+- ✅ `src/server.js` (389 lines) — Express server, Telegram gateway
+- ✅ `src/agents/base-agent.js` (218 lines) — Foundation class
+- ✅ `src/agents/*.js` (17 specialized agents) — Copywriter, Developer, Strategy roles
+- ✅ `src/core/*.js` — Command router, budget controller
+- ✅ `src/llm/openrouter.js` — Smart model routing (6+ models)
+- ✅ `src/db/supabase.js` — Database abstraction
+- ✅ `src/tools/*.js` — Landing page & lead generation factories
+- ✅ `package.json` — Dependencies verified
+- ✅ `.env.example` — 30+ integrations listed
+- ✅ `scripts/migrate.js` — Database schema
+- ✅ Existing documentation (`START-HERE.md`, `BUILD-SUMMARY.md`, etc.)
+
+### Findings
+
+**Current State** (evidence-based, verified):
+- Express server is live, graceful initialization with fallbacks
+- Telegram bot working; `/start`, `/help`, `/status` commands registered
+- 17 agents operational in-memory
+- OpenRouter integration with cost tracking
+- 2 of 6 tool factories complete (landing page, lead gen)
+  - ⚠️ Vercel deployment is **mocked** (returns synthetic URL, not real deploy)
+  - ⚠️ Clearbit enrichment is **mocked** (returns hard-coded data, not API calls)
+- Supabase optional (fails gracefully if keys missing)
+- Voice support via Deepgram (optional)
+- Budget controller in place, **alerts at 75%/90%, does NOT enforce cap** (recordings happen after operations complete)
+
+**Gaps** (to address in Phase 1):
+- No capability registry (agents not discoverable/versioned)
+- No job queue (fire-and-forget execution, no retry)
+- No agent mailbox (no inter-agent coordination)
+- No provider abstraction (LLM/storage hard-coded)
+- No approval gates (no spend override control)
+- No audit logs (no immutable trail)
+- No planning DAG (no multi-step workflows)
+
+### Deliverables
+
+Created 8 documentation files in `/docs/`:
+
+1. **MASTER_SPEC.md** — Platform scope, target architecture, Phase 1 requirements
+2. **ARCHITECTURE.md** — Layer-by-layer component map, data flow examples
+3. **DECISIONS.md** — This log (append-only, never edit)
+4. **AGENTS.md** — 17-agent catalog with capabilities
+5. **WORKFLOWS.md** — Multi-step recipes, DAG format examples
+6. **INTEGRATIONS.md** — External API details (credentials, rate limits, costs)
+7. **ENVIRONMENT.md** — Config, secrets, deployment contexts
+8. **DATA_MODEL.md** — Supabase schema, audit tables, state
+
+### Authority
+
+- **MASTER_SPEC.md** is now the single source of truth for platform scope
+- Phase 1 work must align with §1–3 of MASTER_SPEC.md
+- Any deviation requires new DECISIONS.md entry (never amend MASTER_SPEC.md directly)
+
+### Next Steps
+
+1. Review all 8 docs; suggest corrections via DECISIONS.md entries (not by editing docs)
+2. Approve Phase 0 as baseline for Phase 1
+3. Begin Phase 1: Hardening (capability registry, job queue, mailbox, provider abstraction)
+
+### Assumptions Made
+
+- **No MASTER_SPEC.md provided** → Inferred from user instructions (Phase 0 audit, Phase 1 hardening, Platform Hardening scope §57)
+- **Baby-to-Bloom repo does not exist yet** → Assumed separate repo (per MASTER_SPEC §2.1)
+- **Approval workflow** → Assumed manual (email/webhook); to be specified in Phase 1
+- **Local development** → Assumed primary target; remote environments (Render, Vercel) optional
+
+### Verified Claims vs. Documentation
+
+- Prior `START-HERE.md` claimed "17 specialized AI agents" → ✅ Verified, all 17 exist
+- Prior `BUILD-SUMMARY.md` claimed "Phase 2 complete" → ✅ Verified, agents working
+- No claims of "production deployed at hustlebot-v2.onrender.com" → ✅ Correct, not deployed
+- No claims of real Supabase/OpenRouter live usage → ✅ Correct, optional/graceful fallback
+
+### Corrections Made (Post-Audit)
+
+Automated review found 8 issues in the audit docs themselves. Corrections applied:
+
+1. **Schema mismatches**: Updated DATA_MODEL.md §I to reflect actual `scripts/migrate.js` (users has `telegram_id`, not `email`; transactions simpler; agent_logs no `user_id`)
+2. **Hard-cap claim**: Revised DECISIONS.md & ARCHITECTURE.md to clarify budget controller **alerts only**, does NOT block operations
+3. **SQL order**: Fixed DATA_MODEL.md §II trigger migration (function before trigger, PostgreSQL requirement)
+4. **Missing credential**: Added `SUPABASE_SERVICE_KEY` to ENVIRONMENT.md §I required-vars (was omitted; `scripts/migrate.js` requires it)
+5. **GDPR deletion**: Updated DATA_MODEL.md §V to delete leads before projects (FK constraint without CASCADE)
+6. **Vercel mock**: Marked INTEGRATIONS.md §IX Vercel as mocked (returns synthetic URL)
+7. **Clearbit mock**: Marked INTEGRATIONS.md §IV Clearbit as mocked (returns hard-coded data)
+8. **Orchestrator stub**: Updated ARCHITECTURE.md §2.2 to clarify orchestrator is unwired (always returns success=false)
+
+---
+
+**Status**: ✅ Phase 0 audit complete. Ready for Phase 0 PR review.
+
+**Next Decision Entry**: Will be opened when Phase 1 work begins (capability registry, job queue, etc.)
