@@ -99,6 +99,40 @@ Per MASTER_SPEC §57, Phase 1 requires 10 hardening items:
 - ✅ Workflow validation (completeness, reachability, cycles)
 - 🔧 Database methods stub: none (all in-memory)
 
+**8. Agent Identities** (`src/core/agent-identities.js`) — Phase 1.8
+- ✅ Versioned agent objects with metadata
+- ✅ Agent registration and discovery (by ID, by role)
+- ✅ Capability binding (agents declare what they can do)
+- ✅ Status management (active | deprecated | beta)
+- ✅ Swarm composition tracking (agents grouped by role)
+- ✅ Agent requirements (memory, timeout, cost)
+- ✅ Best agent selection for a task
+- ✅ Agent validation and health checks
+- 🔧 Database methods stub: `db.getAllAgents()`, `db.registerAgent()`, `db.updateAgentStatus()`, `db.updateAgentCapabilities()`
+
+**9. Shared Audit Logs** (`src/core/shared-audit-logs.js`) — Phase 1.9
+- ✅ Immutable append-only audit trail
+- ✅ Log types (agent_executed, policy_checked, approval_required, error_occurred)
+- ✅ Actor tracking (user, agent, system)
+- ✅ Resource tracking (agent, job, project, workflow)
+- ✅ In-memory buffer with periodic DB flush
+- ✅ Audit trail export (JSON, CSV, HTML)
+- ✅ Query and filtering APIs
+- ✅ Statistics and compliance reporting
+- ✅ Automatic retention cleanup
+- 🔧 Database methods stub: `db.bulkCreateAuditLogs()`, `db.queryAuditLogs()`, `db.getRecentAuditLogs()`, `db.deleteOldAuditLogs()`
+
+**10. Policy & Approval Layer** (`src/core/policy-approval-layer.js`) — Phase 1.10
+- ✅ Budget and spending policies per user
+- ✅ Per-operation cost limits
+- ✅ Approval gates for high-cost operations
+- ✅ Feature flags and capability access control
+- ✅ Approval workflow (pending | approved | rejected)
+- ✅ Policy validation and enforcement
+- ✅ Feature enable/disable APIs
+- ✅ Approval statistics and tracking
+- 🔧 Database methods stub: `db.getAllPolicies()`, `db.createPolicy()`, `db.updatePolicy()`, `db.updatePolicyFeatures()`, `db.createApproval()`, `db.updateApprovalStatus()`
+
 ### Key Design Decisions
 
 **1. Capability Registry vs. Tool Registry Separation**
@@ -150,22 +184,61 @@ All three modules define methods they need from `db` layer:
 4. **Job Queue** (Phase 1.5): Will use tool registry for tool invocation
 5. **Agent Mailbox** (Phase 1.6): Will check capabilities before routing inter-agent messages
 
-### Remaining Phase 1 Items
+### Phase 1 Completion Status
 
-1. **Agent Identities** (Phase 1.8): Versioned agent objects and deployment tracking
-2. **Shared Audit Logs** (Phase 1.9): Immutable append-only compliance table
-3. **Policy/Approval Layer** (Phase 1.10): Budget gates, approval thresholds, feature flags
+✅ **All 10 hardening modules implemented** (foundation + orchestration + governance layers)
 
-### Next Steps (Post-Foundation)
+1. ✅ Capability Registry (Phase 1.1)
+2. ✅ Tool Registry (Phase 1.2)
+3. ✅ Provider Abstraction (Phase 1.3)
+4. ✅ Media Abstraction (Phase 1.4)
+5. ✅ Job Queue (Phase 1.5)
+6. ✅ Agent Mailbox (Phase 1.6)
+7. ✅ Planning DAG (Phase 1.7)
+8. ✅ Agent Identities (Phase 1.8)
+9. ✅ Shared Audit Logs (Phase 1.9)
+10. ✅ Policy & Approval Layer (Phase 1.10)
 
-1. **Database Schema**: Create 10+ tables in Supabase for registries + job queue + mailbox
-2. **Server Integration**: Wire all 7 registries into server.js initialization sequence
-3. **Bootstrap Data**: Seed capabilities/tools with existing 17 agents (from AGENTS.md catalog)
-4. **Integration Testing**: Test registry lookups, job queue flow, mailbox delivery
-5. **Orchestrator Rewiring**: Connect Agent Orchestrator to capability registry for swarm spawning
-6. **Agent Identities** (Phase 1.8): Wrap agents in identity objects with versioning
-7. **Audit Logs** (Phase 1.9): Create immutable audit table; connect to all major operations
-8. **Policy Layer** (Phase 1.10): Integrate budget controller + approval gates into execution
+### Phase 1.2: Integration & Deployment (Next)
+
+**Phase 1.2 Scope**: Wire registries into runtime; create database schema; bootstrap with existing agents.
+
+1. **Database Schema Migration**
+   - Create tables: capabilities, tools, job_state, mailbox, agents, audit_logs, policies, approvals
+   - Add indexes for performance (user_id, agent_name, status, created_at)
+   - Reference: DATA_MODEL.md Phase 1 section
+
+2. **Database Layer Abstraction** (`src/core/database.js`)
+   - Implement all stub methods (db.getAllCapabilities, db.registerCapability, etc.)
+   - Connection pooling and error handling
+   - Transaction support for multi-step operations
+
+3. **Server Integration** (`src/server.js`)
+   - Initialize all 10 modules in correct order
+   - Wiring: provider abstraction → capability registry → orchestrator
+   - Health checks per module
+   - Graceful shutdown with flushing
+
+4. **Bootstrap Data**
+   - Seed 17 existing agents into agent_identities table
+   - Register capabilities from AGENTS.md catalog
+   - Register tools (landing page, lead gen, etc.)
+
+5. **Integration Testing**
+   - Registry lookups (agent discovery, tool invocation)
+   - Job queue flow (enqueue → execute → result → cleanup)
+   - Mailbox delivery (send → read → process)
+   - Policy enforcement (approval workflow)
+
+6. **Orchestrator Rewiring** (`src/agents/orchestrator.js`)
+   - Connect spawnSwarm() to capability registry
+   - Agent selection by role + capabilities
+   - Mailbox-based coordination
+
+7. **End-to-End Testing**
+   - Multi-agent workflow execution
+   - Budget enforcement and approval gates
+   - Audit trail verification
 
 ### Testing Strategy
 
@@ -193,9 +266,11 @@ All three modules define methods they need from `db` layer:
 
 ---
 
-**Status**: Phase 1.1-1.3 foundation layers implemented. Ready for DB schema + server integration.
+**Status**: ✅ Phase 1 (Platform Hardening) architecturally complete. All 10 modules implemented. 
 
-**Next Entry**: Will document Phase 1.4 (Media Abstraction) and 1.5 (Job Queue) when those layers complete.
+**Current**: Core module implementations ready for server integration and database schema creation (Phase 1.2).
+
+**Next Entry**: Will document Phase 1.2 (Database Integration & Server Wiring) when implementation begins.
 
 ---
 
