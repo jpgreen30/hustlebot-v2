@@ -29,7 +29,17 @@ SUPABASE_URL=https://xxx.supabase.co
 SUPABASE_KEY=eyJhbGc...
 ```
 
-**4. Database Migration** (optional, but recommended)
+**4. Required for Database Migration**
+```bash
+# BEFORE running npm run db:migrate, also set:
+SUPABASE_SERVICE_KEY=eyJhbGc...  # Service role key (NOT anon key)
+```
+
+To get the service role key:
+- Supabase Dashboard → Settings → API → Service Role Secret key
+- Copy and add to `.env`
+
+**5. Database Migration**
 ```bash
 npm run db:migrate
 ```

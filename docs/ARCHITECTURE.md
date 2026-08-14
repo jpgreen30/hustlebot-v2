@@ -95,20 +95,29 @@ input: "Generate 5 headlines for my SaaS"
 
 **Status**: ✅ Basic version works; Phase 1 upgrades to registry-driven discovery
 
-#### 2.2 Agent Orchestrator
+#### 2.2 Agent Orchestrator (Stub)
 **File**: `src/agents/orchestrator.js`
 
-Registers all 17 agents, tracks execution stats. Current:
+**Current State**: ⏳ **Unwired stub** (not operational)
+
+The current orchestrator initializes an empty agents object and `spawnSwarm()` always returns `{ success: false }`. It is not instantiated anywhere in the running server, so agent execution is currently **direct per task** (Copywriter, Frontend Developer, etc. respond to Telegram commands inline, not via orchestrator routing).
+
 ```javascript
-// Pseudo-code
-agents = [CopywriterAgent, ContentWriterAgent, FrontendDeveloper, ...]
-execute(taskType, input) {
-  agent = agents.find(a => a.canHandle(taskType))
-  return agent.execute(input)
+// Current actual code
+constructor(db, llm, budgetController) {
+  this.agents = {}  // Empty; no agents registered
+}
+
+async spawnSwarm(swarmName, userId, projectId, parameters) {
+  return { success: false, message: 'Agent swarms coming soon' }
 }
 ```
 
-**Status**: ✅ In-memory registry; Phase 1 moves to durable registry with schema
+**Phase 1**: Build real agent registration and orchestrator routing:
+1. `registerAgent(name, agent)` populates `this.agents`
+2. Command Router queries orchestrator for capable agents
+3. Orchestrator instantiates agent, hands off execution
+4. Result flows back through mailbox
 
 ---
 

@@ -217,7 +217,7 @@ const output = await replicate.run(
 ### Clearbit (Email Validation & B2B Enrichment)
 
 **Purpose**: Validate emails, enrich leads with company data  
-**Status**: ✅ Integrated in Lead Gen Factory, currently optional
+**Status**: ⏳ **MOCKED** (not yet real; fabricated data used instead)
 
 | Property | Value |
 |----------|-------|
@@ -397,7 +397,7 @@ TELEGRAM_BOT_TOKEN=123456789:ABCdefGHIjklmnoPQRstuvWXYZabcdefg
 ### Vercel (Frontend Hosting)
 
 **Purpose**: Deploy React landing pages, dashboards  
-**Status**: ✅ Integrated in landing page factory
+**Status**: ⏳ **MOCKED** (not yet real; synthetic URLs returned instead)
 
 | Property | Value |
 |----------|-------|

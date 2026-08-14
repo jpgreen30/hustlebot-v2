@@ -31,9 +31,11 @@
 - 17 agents operational in-memory
 - OpenRouter integration with cost tracking
 - 2 of 6 tool factories complete (landing page, lead gen)
+  - ⚠️ Vercel deployment is **mocked** (returns synthetic URL, not real deploy)
+  - ⚠️ Clearbit enrichment is **mocked** (returns hard-coded data, not API calls)
 - Supabase optional (fails gracefully if keys missing)
 - Voice support via Deepgram (optional)
-- Budget controller in place, hard cap enforcement
+- Budget controller in place, **alerts at 75%/90%, does NOT enforce cap** (recordings happen after operations complete)
 
 **Gaps** (to address in Phase 1):
 - No capability registry (agents not discoverable/versioned)
@@ -82,6 +84,19 @@ Created 8 documentation files in `/docs/`:
 - Prior `BUILD-SUMMARY.md` claimed "Phase 2 complete" → ✅ Verified, agents working
 - No claims of "production deployed at hustlebot-v2.onrender.com" → ✅ Correct, not deployed
 - No claims of real Supabase/OpenRouter live usage → ✅ Correct, optional/graceful fallback
+
+### Corrections Made (Post-Audit)
+
+Automated review found 8 issues in the audit docs themselves. Corrections applied:
+
+1. **Schema mismatches**: Updated DATA_MODEL.md §I to reflect actual `scripts/migrate.js` (users has `telegram_id`, not `email`; transactions simpler; agent_logs no `user_id`)
+2. **Hard-cap claim**: Revised DECISIONS.md & ARCHITECTURE.md to clarify budget controller **alerts only**, does NOT block operations
+3. **SQL order**: Fixed DATA_MODEL.md §II trigger migration (function before trigger, PostgreSQL requirement)
+4. **Missing credential**: Added `SUPABASE_SERVICE_KEY` to ENVIRONMENT.md §I required-vars (was omitted; `scripts/migrate.js` requires it)
+5. **GDPR deletion**: Updated DATA_MODEL.md §V to delete leads before projects (FK constraint without CASCADE)
+6. **Vercel mock**: Marked INTEGRATIONS.md §IX Vercel as mocked (returns synthetic URL)
+7. **Clearbit mock**: Marked INTEGRATIONS.md §IV Clearbit as mocked (returns hard-coded data)
+8. **Orchestrator stub**: Updated ARCHITECTURE.md §2.2 to clarify orchestrator is unwired (always returns success=false)
 
 ---
 

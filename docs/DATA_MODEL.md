@@ -12,29 +12,35 @@ Defined in `scripts/migrate.js`. Deployed to Supabase PostgreSQL.
 
 ### Table: `users`
 
-**Purpose**: User identity, settings, budget
+**Purpose**: Telegram user identity, budget settings
+
+Defined in `scripts/migrate.js`. The actual schema differs from common user tables (no email; Telegram-centric).
 
 ```sql
 CREATE TABLE users (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  email TEXT UNIQUE NOT NULL,
-  name TEXT,
-  monthly_budget DECIMAL DEFAULT 100,
-  total_spend DECIMAL DEFAULT 0,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  telegram_id BIGINT UNIQUE NOT NULL,
+  telegram_username VARCHAR(255),
+  monthly_budget DECIMAL(10, 2) DEFAULT 100.00,
+  budget_currency VARCHAR(3) DEFAULT 'USD',
+  timezone VARCHAR(50) DEFAULT 'UTC',
+  created_at TIMESTAMP DEFAULT NOW(),
+  updated_at TIMESTAMP DEFAULT NOW()
 );
+
+CREATE INDEX idx_users_telegram_id ON users(telegram_id);
 ```
 
 | Column | Type | Notes |
 |--------|------|-------|
 | `id` | UUID | Primary key |
-| `email` | TEXT | Unique identifier |
-| `name` | TEXT | Display name |
-| `monthly_budget` | DECIMAL | Hard cap (USD) |
-| `total_spend` | DECIMAL | Running total this month |
-| `created_at` | TIMESTAMPTZ | Account creation |
-| `updated_at` | TIMESTAMPTZ | Last modified |
+| `telegram_id` | BIGINT | UNIQUE, NOT NULL; Telegram user ID from bot |
+| `telegram_username` | VARCHAR | Telegram @username |
+| `monthly_budget` | DECIMAL | Hard budget limit (USD) |
+| `budget_currency` | VARCHAR | Currency code (default: USD) |
+| `timezone` | VARCHAR | User's timezone (default: UTC) |
+| `created_at` | TIMESTAMP | Account creation |
+| `updated_at` | TIMESTAMP | Last modified |
 
 **Indexes**:
 ```sql
@@ -133,34 +139,36 @@ CREATE INDEX idx_leads_status ON leads(status);
 
 **Purpose**: Cost tracking per operation
 
+Defined in `scripts/migrate.js`. Simpler than typical usage schema.
+
 ```sql
 CREATE TABLE transactions (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   user_id UUID NOT NULL REFERENCES users(id),
   project_id UUID REFERENCES projects(id),
-  agent_name TEXT,  -- 'copywriter', 'landing_page_factory', etc.
-  operation TEXT,  -- e.g., 'generate_headlines'
-  cost DECIMAL NOT NULL,  -- USD
-  tokens_in INT,
-  tokens_out INT,
-  model TEXT,  -- 'claude-3.5-sonnet', 'grok-2', etc.
-  status TEXT DEFAULT 'completed',  -- pending | completed | failed
-  created_at TIMESTAMPTZ DEFAULT NOW()
+  amount DECIMAL(10, 4) NOT NULL,
+  service VARCHAR(100) NOT NULL,
+  description TEXT,
+  created_at TIMESTAMP DEFAULT NOW()
 );
+
+CREATE INDEX idx_transactions_user_id ON transactions(user_id);
+CREATE INDEX idx_transactions_project_id ON transactions(project_id);
+CREATE INDEX idx_transactions_service ON transactions(service);
+CREATE INDEX idx_transactions_created_at ON transactions(created_at);
 ```
 
 | Column | Type | Notes |
 |--------|------|-------|
 | `id` | UUID | Primary key |
-| `user_id` | UUID | FK to users |
+| `user_id` | UUID | FK to users (NOT NULL) |
 | `project_id` | UUID | FK to projects (nullable) |
-| `agent_name` | TEXT | Which agent ran |
-| `operation` | TEXT | Specific tool/operation |
-| `cost` | DECIMAL | $ amount |
-| `tokens_in`, `tokens_out` | INT | Token usage |
-| `model` | TEXT | LLM model used |
-| `status` | TEXT | Outcome |
-| `created_at` | TIMESTAMPTZ | When it happened |
+| `amount` | DECIMAL | $ cost (not agent-level detail) |
+| `service` | VARCHAR | Service name (e.g., 'openrouter', 'vercel') |
+| `description` | TEXT | Optional notes |
+| `created_at` | TIMESTAMP | When recorded |
+
+**Note**: Phase 1 should add `agent_name`, `model`, `tokens_in/out` columns for finer-grained cost tracking.
 
 **Indexes**:
 ```sql
@@ -173,35 +181,37 @@ CREATE INDEX idx_transactions_created_at ON transactions(created_at DESC);
 
 ### Table: `agent_logs`
 
-**Purpose**: Detailed execution logs per agent
+**Purpose**: Agent execution history
+
+Defined in `scripts/migrate.js`. Minimal structure; no user_id in current version.
 
 ```sql
 CREATE TABLE agent_logs (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id UUID REFERENCES users(id),
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  agent_name VARCHAR(255) NOT NULL,
   project_id UUID REFERENCES projects(id),
-  agent_name TEXT NOT NULL,
-  agent_id UUID,  -- Phase 1: Agent identity
   input JSONB,
   output JSONB,
-  error TEXT,
   execution_time_ms INT,
-  created_at TIMESTAMPTZ DEFAULT NOW()
+  created_at TIMESTAMP DEFAULT NOW()
 );
+
+CREATE INDEX idx_agent_logs_project_id ON agent_logs(project_id);
+CREATE INDEX idx_agent_logs_agent_name ON agent_logs(agent_name);
+CREATE INDEX idx_agent_logs_created_at ON agent_logs(created_at);
 ```
 
 | Column | Type | Notes |
 |--------|------|-------|
 | `id` | UUID | Primary key |
-| `user_id` | UUID | FK to users |
-| `project_id` | UUID | FK to projects |
-| `agent_name` | TEXT | Agent class name |
-| `agent_id` | UUID | Phase 1: Unique agent instance ID |
+| `agent_name` | VARCHAR | Agent class name (NOT NULL) |
+| `project_id` | UUID | FK to projects (nullable) |
 | `input` | JSONB | Input JSON |
 | `output` | JSONB | Output JSON |
-| `error` | TEXT | Error message if failed |
-| `execution_time_ms` | INT | Wall-clock time |
-| `created_at` | TIMESTAMPTZ | When it ran |
+| `execution_time_ms` | INT | Wall-clock duration |
+| `created_at` | TIMESTAMP | When executed |
+
+**Note**: Phase 1 should add `user_id` to enable per-user queries and cost rollups.
 
 **Indexes**:
 ```sql
@@ -221,6 +231,14 @@ These tables are **planned** for Phase 1. Not yet created.
 **Purpose**: Append-only compliance trail
 
 ```sql
+-- Create function BEFORE trigger (PostgreSQL requirement)
+CREATE FUNCTION raise_immutable_error() RETURNS TRIGGER AS $$
+BEGIN
+  RAISE EXCEPTION 'audit_logs table is immutable';
+END;
+$$ LANGUAGE plpgsql;
+
+-- Now create table
 CREATE TABLE audit_logs (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -237,13 +255,6 @@ CREATE TABLE audit_logs (
 CREATE TRIGGER audit_logs_immutable
 BEFORE UPDATE OR DELETE ON audit_logs
 FOR EACH ROW EXECUTE FUNCTION raise_immutable_error();
-
--- Function
-CREATE FUNCTION raise_immutable_error() RETURNS TRIGGER AS $$
-BEGIN
-  RAISE EXCEPTION 'audit_logs table is immutable';
-END;
-$$ LANGUAGE plpgsql;
 ```
 
 **Indexes**:
@@ -454,6 +465,8 @@ GROUP BY agent_name;
 
 ### GDPR: Right to be Forgotten
 
+**Important**: Delete leads BEFORE deleting projects (FK constraint without CASCADE).
+
 ```sql
 -- When user requests deletion:
 BEGIN TRANSACTION;
@@ -462,12 +475,23 @@ BEGIN TRANSACTION;
 INSERT INTO archived_users SELECT * FROM users WHERE id = $1;
 INSERT INTO archived_transactions SELECT * FROM transactions WHERE user_id = $1;
 INSERT INTO archived_projects SELECT * FROM projects WHERE user_id = $1;
+INSERT INTO archived_leads 
+  SELECT l.* FROM leads l
+  JOIN projects p ON l.project_id = p.id
+  WHERE p.user_id = $1;
 
--- Delete from main tables
-DELETE FROM transactions WHERE user_id = $1;
-DELETE FROM agent_logs WHERE user_id = $1;
-DELETE FROM projects WHERE user_id = $1;
+-- Delete in correct order (children before parents)
+-- 1. Delete leads first (they reference projects)
 DELETE FROM leads WHERE project_id IN (SELECT id FROM projects WHERE user_id = $1);
+
+-- 2. Delete projects, transactions (they reference users)
+DELETE FROM transactions WHERE user_id = $1;
+DELETE FROM projects WHERE user_id = $1;
+
+-- 3. Delete agent_logs (minimal FK, but still reference user's projects)
+DELETE FROM agent_logs WHERE project_id IN (SELECT id FROM projects WHERE user_id = $1);
+
+-- 4. Finally delete user
 DELETE FROM users WHERE id = $1;
 
 -- Audit log (immutable)
