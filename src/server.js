@@ -2373,28 +2373,49 @@ For more info, visit https://hustlebot.io
   }
 }
 
-// Initialize server
-const server = new HustleBotServer();
-const isVercel = !!process.env.VERCEL;
+let server;
+let app;
 
-if (!isVercel) {
-  // Local development: start normally
-  server.start();
-}
+try {
+  // Initialize server
+  server = new HustleBotServer();
+  const isVercel = !!process.env.VERCEL;
 
-// For Vercel: create app and return it immediately
-// Services initialize asynchronously on first request
-if (!server.app) {
-  server.createApp();
-}
+  if (!isVercel) {
+    // Local development: start normally
+    server.start();
+  } else {
+    // Vercel serverless: create app immediately
+    logger.info('Creating Express app for Vercel serverless...');
+    server.createApp();
+    app = server.app;
+    logger.info('App created and routes set up, exporting...');
 
-// Start background initialization (if Vercel)
-if (isVercel && !server._initStarted) {
-  server._initStarted = true;
-  server.initialize().catch(err => {
-    logger.error('Background initialization error:', err.message);
-  });
+    // Start background initialization without blocking export
+    setImmediate(() => {
+      if (!server._initStarted) {
+        server._initStarted = true;
+        logger.info('Starting background service initialization...');
+        server.initialize().catch(err => {
+          logger.error('Background initialization error:', err.message);
+        });
+      }
+    });
+  }
+
+  if (!app && server) {
+    app = server.app;
+  }
+
+  if (!app) {
+    throw new Error('Failed to create Express app');
+  }
+
+  logger.info('Ready to export app');
+} catch (error) {
+  logger.error('CRITICAL ERROR during startup:', error);
+  throw error;
 }
 
 // Export the app
-export default server.app;
+export default app;
