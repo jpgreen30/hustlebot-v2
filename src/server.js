@@ -2448,7 +2448,14 @@ class HustleBotServer {
   async start() {
     try {
       logger.info('[START] ⏳ Waiting for initialization...');
-      await this.initialize();
+      // Add 30-second timeout to initialization to prevent hanging
+      logger.info('[START] ⏳ Initialization timeout set to 30 seconds...');
+      await Promise.race([
+        this.initialize(),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('Initialization timeout - proceeding to listen')), 30000)
+        )
+      ]);
       logger.info('[START] ✅ Initialization complete');
 
       logger.info(`[START] 📡 About to call app.listen on port ${this.port}...`);
