@@ -203,7 +203,9 @@ describe('ExecutionGraph execution', () => {
     assert.strictEqual(summary.status, GRAPH_STATUS.AWAITING_APPROVAL);
     assert.strictEqual(g.getNode('build').status, NODE_STATUS.COMPLETED);
     assert.strictEqual(g.getNode('ship').status, NODE_STATUS.AWAITING_APPROVAL);
-    assert.deepStrictEqual(summary.awaitingApproval, [{ nodeId: 'ship', capabilityId: 'site.deploy' }]);
+    assert.deepStrictEqual(summary.awaitingApproval, [
+      { nodeId: 'ship', capabilityId: 'site.deploy', approvalId: null }
+    ]);
   });
 
   test('resumes an approved node and finishes', async () => {

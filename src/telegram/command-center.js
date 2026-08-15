@@ -47,6 +47,12 @@ class TelegramCommandCenter {
       await this.showSystemStatus(ctx);
     });
 
+    // Human approval layer
+    this.bot.command('approvals', this.handleApprovalsCommand.bind(this));
+    this.bot.command('approve', this.handleApproveCommand.bind(this));
+    this.bot.command('reject', this.handleRejectCommand.bind(this));
+    this.bot.command('modify', this.handleModifyCommand.bind(this));
+
     // AI Agent Commands
     this.bot.command('agents', this.handleAgentsCommand.bind(this));
     this.bot.command('deepseek', this.handleDeepseekCommand.bind(this));
@@ -256,6 +262,11 @@ class TelegramCommandCenter {
     logger.info(`📍 Callback query: ${action}`);
 
     try {
+      // Approval buttons: apr:<a|r|m>:<approvalId>
+      if (action.startsWith('apr:')) {
+        await this.handleApprovalCallback(ctx, action);
+        return;
+      }
       // Menu navigation
       if (action === 'menu:main') {
         await this.showMainMenu(ctx);
@@ -517,6 +528,242 @@ class TelegramCommandCenter {
     } catch (error) {
       logger.error('Failed to edit message:', error.message);
       await ctx.reply(text, extra);
+    }
+  }
+
+  // ---- Human approval layer ---------------------------------------------
+
+  /** Who to attribute a decision to, for the audit record. */
+  static actorFrom(ctx) {
+    const from = ctx.from || {};
+    return from.username ? `@${from.username}` : `telegram:${from.id}`;
+  }
+
+  approvalGate() {
+    const gate = this.server?.approvalGate;
+    if (!gate) throw new Error('Approval layer not initialized');
+    return gate;
+  }
+
+  formatApproval(record) {
+    const reasons = record.reasons?.length
+      ? record.reasons.map((r) => `  • ${r.reason}`).join('\n')
+      : '  • flagged as consequential';
+
+    const inputs = JSON.stringify(record.input || {}, null, 2);
+    const trimmed = inputs.length > 600 ? `${inputs.slice(0, 600)}\n… (truncated)` : inputs;
+
+    return (
+      `🔐 *Approval needed*\n\n` +
+      `*Action:* ${record.description || record.capabilityId}\n` +
+      `*Capability:* \`${record.capabilityId}\`\n` +
+      `*Estimated cost:* $${record.estimatedCost ?? 0}\n` +
+      `*Requested by:* ${record.requestedBy}\n` +
+      (record.graphId ? `*Plan:* \`${record.graphId}\` (step \`${record.nodeId}\`)\n` : '') +
+      `\n*Why this needs a human:*\n${reasons}\n` +
+      `\n*Inputs:*\n\`\`\`\n${trimmed}\n\`\`\`\n` +
+      `\n\`${record.id}\``
+    );
+  }
+
+  approvalKeyboard(id) {
+    return {
+      inline_keyboard: [
+        [
+          { text: '✅ Approve', callback_data: `apr:a:${id}` },
+          { text: '❌ Reject', callback_data: `apr:r:${id}` }
+        ],
+        [{ text: '✏️ Modify', callback_data: `apr:m:${id}` }]
+      ]
+    };
+  }
+
+  /**
+   * Push a pending approval to the operator. Wired to the gate's onRequest,
+   * so a paused plan actively asks rather than waiting to be discovered.
+   */
+  async notifyApprovalRequest(record) {
+    const chatId = process.env.TELEGRAM_ADMIN_CHAT_ID;
+    if (!chatId) {
+      logger.warn(
+        `⚠️  Approval ${record.id} is pending but TELEGRAM_ADMIN_CHAT_ID is not set - ` +
+        'it will not be pushed to Telegram. Use /approvals to see it.'
+      );
+      return;
+    }
+
+    await this.bot.telegram.sendMessage(chatId, this.formatApproval(record), {
+      parse_mode: 'Markdown',
+      reply_markup: this.approvalKeyboard(record.id)
+    });
+  }
+
+  async handleApprovalCallback(ctx, action) {
+    const [, verb, approvalId] = action.split(':');
+    const actor = TelegramCommandCenter.actorFrom(ctx);
+
+    try {
+      const gate = this.approvalGate();
+
+      if (verb === 'm') {
+        const record = await gate.get(approvalId);
+        if (!record) {
+          await ctx.answerCbQuery('That request no longer exists');
+          return;
+        }
+        await ctx.answerCbQuery('Send the replacement inputs');
+        await ctx.reply(
+          `✏️ *Modify ${record.capabilityId}*\n\n` +
+          `Current inputs:\n\`\`\`\n${JSON.stringify(record.input, null, 2)}\n\`\`\`\n` +
+          `Reply with the fields to change, as JSON:\n` +
+          `\`/modify ${approvalId} {"projectId":"new-value"}\`\n\n` +
+          `_Only the keys you supply are replaced; the rest are kept._`,
+          { parse_mode: 'Markdown' }
+        );
+        return;
+      }
+
+      const decided =
+        verb === 'a'
+          ? await gate.approve(approvalId, actor, 'Approved from Telegram')
+          : await gate.reject(approvalId, actor, 'Rejected from Telegram');
+
+      await ctx.answerCbQuery(verb === 'a' ? 'Approved' : 'Rejected');
+      await ctx.editMessageText(
+        `${verb === 'a' ? '✅' : '❌'} *${decided.status.toUpperCase()}* by ${actor}\n\n` +
+        `${decided.description || decided.capabilityId}\n` +
+        `\`${decided.id}\``,
+        { parse_mode: 'Markdown' }
+      ).catch(() => {});
+
+      await this.resumeAfterDecision(ctx, decided);
+    } catch (error) {
+      logger.error(`Approval callback failed: ${error.message}`);
+      await ctx.answerCbQuery(error.message.slice(0, 190)).catch(() => {});
+    }
+  }
+
+  /**
+   * A decision is only useful if the paused plan actually moves. Resume it
+   * and report where it got to.
+   */
+  async resumeAfterDecision(ctx, record) {
+    if (!record.graphId || !this.server?.planner) return;
+
+    try {
+      const result = await this.server.planner.resume(record.graphId, { actor: record.decidedBy });
+      if (!result.resumed) return;
+
+      await ctx.reply(
+        `▶️ Plan \`${record.graphId}\` resumed: *${result.status}*` +
+        (result.error ? `\n${result.error}` : ''),
+        { parse_mode: 'Markdown' }
+      );
+    } catch (error) {
+      logger.error(`Could not resume plan after decision: ${error.message}`);
+      await ctx.reply(`⚠️ Decision recorded, but the plan could not resume: ${error.message}`);
+    }
+  }
+
+  async handleApprovalsCommand(ctx) {
+    try {
+      const pending = await this.approvalGate().listPending();
+
+      if (pending.length === 0) {
+        await ctx.reply('✅ Nothing is waiting for approval.');
+        return;
+      }
+
+      await ctx.reply(`🔐 *${pending.length} pending approval(s)*`, { parse_mode: 'Markdown' });
+      for (const record of pending.slice(0, 5)) {
+        await ctx.reply(this.formatApproval(record), {
+          parse_mode: 'Markdown',
+          reply_markup: this.approvalKeyboard(record.id)
+        });
+      }
+      if (pending.length > 5) {
+        await ctx.reply(`_…and ${pending.length - 5} more._`, { parse_mode: 'Markdown' });
+      }
+    } catch (error) {
+      logger.error(`Approvals command failed: ${error.message}`);
+      await ctx.reply(`❌ ${error.message}`);
+    }
+  }
+
+  async handleApproveCommand(ctx) {
+    const [id, ...rest] = ctx.message.text.split(' ').slice(1);
+    if (!id) {
+      await ctx.reply('Usage: `/approve <approval-id> [note]`', { parse_mode: 'Markdown' });
+      return;
+    }
+    await this.decideByCommand(ctx, 'approve', id, rest.join(' '));
+  }
+
+  async handleRejectCommand(ctx) {
+    const [id, ...rest] = ctx.message.text.split(' ').slice(1);
+    if (!id) {
+      await ctx.reply('Usage: `/reject <approval-id> [reason]`', { parse_mode: 'Markdown' });
+      return;
+    }
+    await this.decideByCommand(ctx, 'reject', id, rest.join(' '));
+  }
+
+  async handleModifyCommand(ctx) {
+    const raw = ctx.message.text.slice('/modify'.length).trim();
+    const spaceAt = raw.indexOf(' ');
+    const id = spaceAt === -1 ? raw : raw.slice(0, spaceAt);
+    const json = spaceAt === -1 ? '' : raw.slice(spaceAt + 1).trim();
+
+    if (!id || !json) {
+      await ctx.reply(
+        'Usage: `/modify <approval-id> {"key":"new value"}`',
+        { parse_mode: 'Markdown' }
+      );
+      return;
+    }
+
+    let inputs;
+    try {
+      inputs = JSON.parse(json);
+    } catch (error) {
+      await ctx.reply(`❌ That is not valid JSON: ${error.message}`);
+      return;
+    }
+
+    try {
+      const decided = await this.approvalGate().modify(
+        id,
+        TelegramCommandCenter.actorFrom(ctx),
+        inputs,
+        'Modified from Telegram'
+      );
+      await ctx.reply(
+        `✏️ *Approved with changes*\n\n\`\`\`\n${JSON.stringify(decided.modifiedInputs, null, 2)}\n\`\`\``,
+        { parse_mode: 'Markdown' }
+      );
+      await this.resumeAfterDecision(ctx, decided);
+    } catch (error) {
+      await ctx.reply(`❌ ${error.message}`);
+    }
+  }
+
+  async decideByCommand(ctx, decision, id, note) {
+    try {
+      const gate = this.approvalGate();
+      const actor = TelegramCommandCenter.actorFrom(ctx);
+      const decided =
+        decision === 'approve'
+          ? await gate.approve(id, actor, note || null)
+          : await gate.reject(id, actor, note || null);
+
+      await ctx.reply(
+        `${decision === 'approve' ? '✅' : '❌'} *${decided.status}* by ${actor}\n` +
+        `${decided.description || decided.capabilityId}`,
+        { parse_mode: 'Markdown' }
+      );
+      await this.resumeAfterDecision(ctx, decided);
+    } catch (error) {
+      await ctx.reply(`❌ ${error.message}`);
     }
   }
 

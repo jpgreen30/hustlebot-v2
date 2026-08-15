@@ -43,6 +43,7 @@ import { CapabilityRegistry } from './core/capability-registry.js';
 import { registerPlatformCapabilities } from './core/platform-capabilities.js';
 import { Planner } from './core/planner.js';
 import { JobQueue } from './factories/job-queue.js';
+import { ApprovalGate } from './core/approval-gate.js';
 import { N8NIntegration } from './integrations/n8n-integration.js';
 import { PaymentIntegration } from './integrations/payment-integration.js';
 import { SocialIntegration } from './integrations/social-integration.js';
@@ -99,6 +100,8 @@ class HustleBotServer {
     this.capabilityRegistry = null;
     this.planner = null;
     this.jobQueue = null;
+    this.approvalGate = null;
+    this.commandCenter = null;
     this.costOptimizer = null;
     this.memorySystem = null;
     // Phase 6 Features
@@ -537,6 +540,35 @@ class HustleBotServer {
         logger.warn('⚠️  Capability Registry initialization failed, continuing:', error.message);
       }
 
+      // Human approval layer, before the planner that depends on it.
+      try {
+        logger.info('🔐 Initializing Approval Gate...');
+        this.approvalGate = new ApprovalGate({
+          registry: this.capabilityRegistry,
+          redis: this.mailbox?.redis || null,
+          spendThreshold: parseFloat(process.env.APPROVAL_SPEND_THRESHOLD || '5'),
+          campaignThreshold: parseInt(process.env.APPROVAL_CAMPAIGN_THRESHOLD || '100'),
+          ttlMs: parseInt(process.env.APPROVAL_TTL_MS || String(24 * 60 * 60 * 1000)),
+          // Only ever true deliberately, for a non-production environment.
+          autoApprove: process.env.APPROVAL_AUTO_APPROVE === 'true',
+          onRequest: async (record) => {
+            if (this.commandCenter?.notifyApprovalRequest) {
+              await this.commandCenter.notifyApprovalRequest(record);
+            }
+          },
+          onDecision: (record) => {
+            logger.info(
+              `📝 AUDIT approval ${record.id} ${record.status} by ${record.decidedBy} ` +
+              `for ${record.capabilityId}${record.graphId ? ` (plan ${record.graphId})` : ''}`
+            );
+          }
+        });
+        await this.approvalGate.initialize();
+        logger.info('✅ Approval Gate ready');
+      } catch (error) {
+        logger.warn('⚠️  Approval Gate initialization failed, continuing:', error.message);
+      }
+
       // Planning swarm: objective in, execution graph out, run durably.
       try {
         logger.info('🧠 Initializing Planner...');
@@ -552,7 +584,8 @@ class HustleBotServer {
         this.planner = new Planner({
           registry: this.capabilityRegistry,
           llm: this.llm,
-          jobQueue: this.jobQueue
+          jobQueue: this.jobQueue,
+          approvalGate: this.approvalGate
         });
 
         // Registered before start() so a graph recovered from a restart has
@@ -585,6 +618,7 @@ class HustleBotServer {
               { command: 'workflows', description: 'Workflow automation' },
               { command: 'analytics', description: 'View analytics' },
               { command: 'system', description: 'System status' },
+              { command: 'approvals', description: 'Review pending approvals' },
               { command: 'agents', description: 'Check AI agent status' },
               { command: 'deepseek', description: 'Ask DeepSeek AI' },
               { command: 'kimi', description: 'Ask Kimi AI' },
@@ -865,6 +899,68 @@ class HustleBotServer {
       }
 
       res.json(this.contentFactory.getMetrics());
+    });
+
+    // ---- Human approval layer ----------------------------------------------
+
+    this.app.get('/api/approvals', async (req, res) => {
+      try {
+        if (!this.approvalGate) return res.status(503).json({ error: 'Approval layer not initialized' });
+        const { status, graphId } = req.query;
+        const approvals = status || graphId
+          ? await this.approvalGate.list({ status, graphId })
+          : await this.approvalGate.listPending();
+        res.json({ stats: await this.approvalGate.getStats(), approvals });
+      } catch (error) {
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.get('/api/approvals/:id', async (req, res) => {
+      try {
+        if (!this.approvalGate) return res.status(503).json({ error: 'Approval layer not initialized' });
+        const record = await this.approvalGate.get(req.params.id);
+        if (!record) return res.status(404).json({ error: 'Unknown approval request' });
+        res.json(record);
+      } catch (error) {
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    // approve / reject / modify. `by` is required - a decision with no
+    // decider is not an audit record.
+    this.app.post('/api/approvals/:id/:decision', async (req, res) => {
+      try {
+        if (!this.approvalGate) return res.status(503).json({ error: 'Approval layer not initialized' });
+
+        const { decision } = req.params;
+        if (!['approve', 'reject', 'modify'].includes(decision)) {
+          return res.status(400).json({ error: `Unknown decision: ${decision}` });
+        }
+
+        const { by, notes, inputs } = req.body || {};
+        if (!by) return res.status(400).json({ error: 'by is required to record who decided' });
+
+        const record = await this.approvalGate.decide(req.params.id, {
+          decision,
+          by,
+          notes,
+          modifiedInputs: inputs
+        });
+
+        // A decision is only useful if the paused plan moves.
+        let resumed = null;
+        if (record.graphId && this.planner) {
+          resumed = await this.planner
+            .resume(record.graphId, { actor: by })
+            .catch((error) => ({ error: error.message }));
+        }
+
+        res.json({ approval: record, resumed });
+      } catch (error) {
+        logger.error(`Approval decision error: ${error.message}`);
+        res.status(400).json({ error: error.message });
+      }
     });
 
     // ---- Planning ----------------------------------------------------------
@@ -2563,7 +2659,9 @@ class HustleBotServer {
     logger.info('📱 Setting up Telegram command handlers...');
 
     // Initialize command center
-    const commandCenter = new TelegramCommandCenter(this.bot, this);
+    // Kept on the server so the approval gate can push requests through it.
+    this.commandCenter = new TelegramCommandCenter(this.bot, this);
+    const commandCenter = this.commandCenter;
     commandCenter.register();
 
     // Handle /start command (show main menu)

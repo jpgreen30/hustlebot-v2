@@ -161,7 +161,8 @@ class ExecutionGraph {
       provider: node.provider ?? null,
       startedAt: node.startedAt ?? null,
       completedAt: node.completedAt ?? null,
-      attempts: node.attempts ?? 0
+      attempts: node.attempts ?? 0,
+      approvalId: node.approvalId ?? null
     };
   }
 
@@ -312,8 +313,89 @@ class ExecutionGraph {
    *   maxCost            refuse to start if the estimate exceeds this
    *   onNodeChange       callback for progress reporting
    */
+  /**
+   * Decide whether a node may run.
+   *
+   * Without an approval gate this falls back to the capability's
+   * requiresApproval flag, which only ever pauses. With a gate it consults
+   * the policies, raises a request, and honours an existing decision -
+   * including running with the inputs a human modified.
+   */
+  async checkApproval(node, resolvedInputs, { registry, approvalGate, context }) {
+    if (!approvalGate) {
+      const described = registry.describe(node.capabilityId);
+      const needsApproval = described?.providers?.some((p) => p.requiresApproval);
+      return needsApproval
+        ? { status: 'pending', message: `Requires approval: ${node.capabilityId}` }
+        : { status: 'allowed' };
+    }
+
+    // An earlier run may already have a decision for this node.
+    const existing = await approvalGate.findForNode(this.id, node.id);
+    if (existing) {
+      if (existing.status === 'approved') {
+        return {
+          status: 'allowed',
+          inputs: existing.modifiedInputs || null,
+          approvalId: existing.id
+        };
+      }
+      if (existing.status === 'rejected') {
+        return {
+          status: 'rejected',
+          message: `Rejected by ${existing.decidedBy}${existing.notes ? `: ${existing.notes}` : ''}`,
+          approvalId: existing.id
+        };
+      }
+      if (existing.status === 'expired') {
+        return {
+          status: 'rejected',
+          message: 'Approval request expired before anyone decided',
+          approvalId: existing.id
+        };
+      }
+      // Still pending - keep waiting rather than raising a duplicate.
+      return {
+        status: 'pending',
+        message: `Awaiting approval (${existing.id})`,
+        approvalId: existing.id
+      };
+    }
+
+    const verdict = approvalGate.evaluate({
+      capabilityId: node.capabilityId,
+      input: resolvedInputs,
+      context,
+      estimatedCost: node.estimatedCost ?? undefined
+    });
+    if (!verdict.required) return { status: 'allowed' };
+
+    const request = await approvalGate.request({
+      capabilityId: node.capabilityId,
+      description: node.description,
+      input: resolvedInputs,
+      reasons: verdict.reasons,
+      estimatedCost: verdict.estimatedCost,
+      graphId: this.id,
+      nodeId: node.id,
+      projectId: this.projectId,
+      requestedBy: context.actor || node.agent || 'planner'
+    });
+
+    // autoApprove short-circuits to an approved record.
+    if (request.status === 'approved') {
+      return { status: 'allowed', inputs: request.modifiedInputs || null, approvalId: request.id };
+    }
+
+    return {
+      status: 'pending',
+      message: `Awaiting approval (${request.id}): ${verdict.reasons.map((r) => r.reason).join('; ')}`,
+      approvalId: request.id
+    };
+  }
+
   async execute(options = {}) {
-    const { registry, context = {}, approvedNodes = [], maxCost, onNodeChange } = options;
+    const { registry, context = {}, approvedNodes = [], maxCost, onNodeChange, approvalGate = null } = options;
     if (!registry) throw new Error('execute() requires a capability registry');
 
     const errors = this.validate(registry);
@@ -385,17 +467,6 @@ class ExecutionGraph {
         stillRunnable.map(async (id) => {
           const node = this.getNode(id);
 
-          // Approval gate
-          const described = registry.describe(node.capabilityId);
-          const needsApproval = described?.providers?.some((p) => p.requiresApproval);
-          if (needsApproval && !approved.has(node.id) && !context.bypassApproval) {
-            setStatus(node, NODE_STATUS.AWAITING_APPROVAL, {
-              error: `Requires approval: ${node.capabilityId}`
-            });
-            pausedForApproval = true;
-            return;
-          }
-
           let resolvedInputs;
           try {
             resolvedInputs = resolveRefs(node.inputs, outputs);
@@ -405,6 +476,34 @@ class ExecutionGraph {
               completedAt: Date.now()
             });
             return;
+          }
+
+          // ---- Approval gate --------------------------------------------
+          // Inputs are resolved first so the request shows a human the real
+          // values, not unresolved $ref placeholders.
+          if (!approved.has(node.id) && !context.bypassApproval) {
+            const gateOutcome = await this.checkApproval(node, resolvedInputs, {
+              registry,
+              approvalGate,
+              context
+            });
+
+            if (gateOutcome.status === 'rejected') {
+              setStatus(node, NODE_STATUS.FAILED, {
+                error: gateOutcome.message,
+                completedAt: Date.now()
+              });
+              return;
+            }
+            if (gateOutcome.status === 'pending') {
+              setStatus(node, NODE_STATUS.AWAITING_APPROVAL, {
+                error: gateOutcome.message,
+                approvalId: gateOutcome.approvalId || null
+              });
+              pausedForApproval = true;
+              return;
+            }
+            if (gateOutcome.inputs) resolvedInputs = gateOutcome.inputs;
           }
 
           setStatus(node, NODE_STATUS.RUNNING, { startedAt: Date.now() });
@@ -490,7 +589,7 @@ class ExecutionGraph {
       error: this.error,
       awaitingApproval: this.nodes
         .filter((n) => n.status === NODE_STATUS.AWAITING_APPROVAL)
-        .map((n) => ({ nodeId: n.id, capabilityId: n.capabilityId })),
+        .map((n) => ({ nodeId: n.id, capabilityId: n.capabilityId, approvalId: n.approvalId })),
       outputs: Object.fromEntries(
         this.nodes
           .filter((n) => n.status === NODE_STATUS.COMPLETED)

@@ -54,10 +54,11 @@ Rules:
   return {"error": "explain what capability is missing"}.`;
 
 class Planner {
-  constructor({ registry, llm, jobQueue = null, maxNodes = 12 } = {}) {
+  constructor({ registry, llm, jobQueue = null, approvalGate = null, maxNodes = 12 } = {}) {
     this.registry = registry;
     this.llm = llm;
     this.jobQueue = jobQueue;
+    this.approvalGate = approvalGate;
     this.maxNodes = maxNodes;
     this.graphs = new Map(); // graphId -> ExecutionGraph
   }
@@ -246,11 +247,43 @@ class Planner {
   async execute(graph, context = {}, options = {}) {
     return graph.execute({
       registry: this.registry,
+      approvalGate: options.approvalGate ?? this.approvalGate,
       context,
       approvedNodes: options.approvedNodes || [],
       maxCost: options.maxCost,
       onNodeChange: options.onNodeChange
     });
+  }
+
+  /**
+   * Re-run a graph that stopped for approval. Nodes whose approval has since
+   * been decided are reset to pending so execute() re-evaluates them; a
+   * rejection surfaces there as a failed node.
+   */
+  async resume(graphId, context = {}, options = {}) {
+    const graph = this.getGraph(graphId);
+    if (!graph) throw new Error(`Unknown graph: ${graphId}`);
+
+    let resumable = 0;
+    for (const node of graph.nodes) {
+      if (node.status !== 'awaiting_approval') continue;
+
+      if (this.approvalGate) {
+        const decision = await this.approvalGate.findForNode(graph.id, node.id);
+        // Still undecided - leave it parked.
+        if (!decision || decision.status === 'pending') continue;
+      }
+      node.status = 'pending';
+      node.error = null;
+      resumable++;
+    }
+
+    if (resumable === 0) {
+      return { ...graph.summary(), resumed: 0, message: 'No decided approvals to resume' };
+    }
+
+    const summary = await this.execute(graph, context, options);
+    return { ...summary, resumed: resumable };
   }
 
   /**
@@ -282,6 +315,7 @@ class Planner {
 
       const summary = await graph.execute({
         registry: this.registry,
+        approvalGate: this.approvalGate,
         context: payload.context || {},
         approvedNodes: payload.approvedNodes || [],
         maxCost: payload.maxCost
