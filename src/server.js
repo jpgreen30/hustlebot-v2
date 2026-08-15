@@ -41,6 +41,8 @@ import { Mailbox } from './core/mailbox.js';
 import { WorkflowRegistry } from './core/workflow-registry.js';
 import { CapabilityRegistry } from './core/capability-registry.js';
 import { registerPlatformCapabilities } from './core/platform-capabilities.js';
+import { Planner } from './core/planner.js';
+import { JobQueue } from './factories/job-queue.js';
 import { N8NIntegration } from './integrations/n8n-integration.js';
 import { PaymentIntegration } from './integrations/payment-integration.js';
 import { SocialIntegration } from './integrations/social-integration.js';
@@ -95,6 +97,8 @@ class HustleBotServer {
     this.schedulingEngine = null;
     this.analyticsEngine = null;
     this.capabilityRegistry = null;
+    this.planner = null;
+    this.jobQueue = null;
     this.costOptimizer = null;
     this.memorySystem = null;
     // Phase 6 Features
@@ -533,6 +537,34 @@ class HustleBotServer {
         logger.warn('⚠️  Capability Registry initialization failed, continuing:', error.message);
       }
 
+      // Planning swarm: objective in, execution graph out, run durably.
+      try {
+        logger.info('🧠 Initializing Planner...');
+
+        // Platform-level durable queue, separate from the content factory's.
+        this.jobQueue = new JobQueue({
+          redis: this.mailbox?.redis || null,
+          namespace: 'jobs:platform',
+          maxConcurrent: parseInt(process.env.MAX_CONCURRENT_PLANS || '2'),
+          jobTimeout: parseInt(process.env.PLAN_TIMEOUT_MS || '600000')
+        });
+
+        this.planner = new Planner({
+          registry: this.capabilityRegistry,
+          llm: this.llm,
+          jobQueue: this.jobQueue
+        });
+
+        // Registered before start() so a graph recovered from a restart has
+        // a handler waiting for it.
+        this.jobQueue.registerHandler('plan.execute', this.planner.planExecutionHandler());
+        await this.jobQueue.start();
+
+        logger.info('✅ Planner ready');
+      } catch (error) {
+        logger.warn('⚠️  Planner initialization failed, continuing:', error.message);
+      }
+
       // Try to initialize Telegram bot (graceful failure)
       if (process.env.TELEGRAM_BOT_TOKEN) {
         try {
@@ -833,6 +865,111 @@ class HustleBotServer {
       }
 
       res.json(this.contentFactory.getMetrics());
+    });
+
+    // ---- Planning ----------------------------------------------------------
+
+    // Decompose an objective into an execution graph WITHOUT running it, so
+    // the plan, its cost, and the approvals it needs can be reviewed first.
+    this.app.post('/api/plan', async (req, res) => {
+      try {
+        if (!this.planner) {
+          return res.status(503).json({ error: 'Planner not initialized' });
+        }
+        const { objective, vertical, projectId, context } = req.body || {};
+        if (!objective) return res.status(400).json({ error: 'objective required' });
+
+        const { graph, estimate, approvals, source } = await this.planner.plan(objective, {
+          vertical,
+          projectId,
+          context
+        });
+
+        res.json({
+          graphId: graph.id,
+          source,
+          estimate,
+          approvals,
+          plan: graph.toJSON(),
+          text: graph.toText()
+        });
+      } catch (error) {
+        logger.error(`Planning error: ${error.message}`);
+        res.status(400).json({ error: error.message });
+      }
+    });
+
+    // Plan and run. async=true queues it durably and returns a job id.
+    this.app.post('/api/plan/execute', async (req, res) => {
+      try {
+        if (!this.planner) {
+          return res.status(503).json({ error: 'Planner not initialized' });
+        }
+        const {
+          objective, graphId, vertical, projectId,
+          permissions = [], approvedNodes = [], maxCost, async: runAsync = true
+        } = req.body || {};
+
+        let graph;
+        if (graphId) {
+          graph = this.planner.getGraph(graphId);
+          if (!graph) return res.status(404).json({ error: `Unknown graph: ${graphId}` });
+        } else {
+          if (!objective) return res.status(400).json({ error: 'objective or graphId required' });
+          ({ graph } = await this.planner.plan(objective, { vertical, projectId }));
+        }
+
+        const context = { permissions, vertical, projectId, actor: 'api' };
+
+        if (runAsync) {
+          const jobId = await this.planner.runAsJob(graph, context, { approvedNodes, maxCost });
+          return res.json({
+            graphId: graph.id,
+            jobId,
+            status: 'queued',
+            message: `Plan queued. Check status at /api/jobs/${jobId}`
+          });
+        }
+
+        const summary = await this.planner.execute(graph, context, { approvedNodes, maxCost });
+        res.json({ graphId: graph.id, ...summary });
+      } catch (error) {
+        logger.error(`Plan execution error: ${error.message}`);
+        res.status(400).json({ error: error.message });
+      }
+    });
+
+    // Platform job queue (plans and anything else queued at platform level).
+    this.app.get('/api/jobs/:jobId', async (req, res) => {
+      try {
+        if (!this.jobQueue) return res.status(503).json({ error: 'Job queue not initialized' });
+        const job = await this.jobQueue.getJob(req.params.jobId);
+        if (!job) return res.status(404).json({ error: 'Job not found' });
+        res.json(job);
+      } catch (error) {
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.get('/api/jobs', async (req, res) => {
+      try {
+        if (!this.jobQueue) return res.status(503).json({ error: 'Job queue not initialized' });
+        res.json(await this.jobQueue.getStats());
+      } catch (error) {
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.get('/api/plans', (req, res) => {
+      if (!this.planner) return res.status(503).json({ error: 'Planner not initialized' });
+      res.json({ plans: this.planner.listGraphs() });
+    });
+
+    this.app.get('/api/plans/:graphId', (req, res) => {
+      if (!this.planner) return res.status(503).json({ error: 'Planner not initialized' });
+      const graph = this.planner.getGraph(req.params.graphId);
+      if (!graph) return res.status(404).json({ error: `Unknown graph: ${req.params.graphId}` });
+      res.json({ ...graph.toJSON(), text: graph.toText() });
     });
 
     // ---- Capability registry ----------------------------------------------
