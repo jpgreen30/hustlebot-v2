@@ -13,7 +13,6 @@ import logger from '../utils/logger.js';
 class ContentIntegrations {
   constructor(config = {}) {
     this.providers = config.providers || null;
-    this.replicateToken = process.env.REPLICATE_API_TOKEN;
     this.semrushApiKey = process.env.SEMRUSH_API_KEY;
     this.postizApiKey = process.env.POSTIZ_API_KEY;
   }
@@ -65,12 +64,12 @@ class ContentIntegrations {
   }
 
   /**
-   * Generate image using Replicate
+   * Generate image using OpenRouter
    */
   async generateImage(prompt, options = {}) {
     try {
-      if (!this.replicateToken) {
-        logger.warn('Replicate token not set, returning placeholder image URL');
+      if (!this.providers) {
+        logger.warn('OpenRouter provider not configured, returning placeholder image URL');
         return {
           url: `https://via.placeholder.com/1200x630?text=${encodeURIComponent(prompt.substring(0, 30))}`,
           prompt,
@@ -79,70 +78,52 @@ class ContentIntegrations {
         };
       }
 
-      logger.info(`🖼️ Generating image with Replicate: ${prompt.substring(0, 60)}...`);
+      logger.info(`🖼️ Generating image with OpenRouter: ${prompt.substring(0, 60)}...`);
 
-      const enhancedPrompt = `Professional, high-quality featured image for article about: ${prompt}. Clean, modern design, suitable for parenting/pregnancy blog.`;
+      const enhancedPrompt = `Professional, high-quality featured image for article about: ${prompt}. Clean, modern design, suitable for parenting/pregnancy blog. 16:9 aspect ratio.`;
 
-      // Use Replicate API
-      const response = await fetch('https://api.replicate.com/v1/predictions', {
+      // Use OpenRouter image generation API
+      const openrouterKey = process.env.OPENROUTER_API_KEY;
+      if (!openrouterKey) {
+        throw new Error('OPENROUTER_API_KEY not configured');
+      }
+
+      const response = await fetch('https://openrouter.ai/api/v1/images/generations', {
         method: 'POST',
         headers: {
-          'Authorization': `Token ${this.replicateToken}`,
-          'Content-Type': 'application/json'
+          'Authorization': `Bearer ${openrouterKey}`,
+          'Content-Type': 'application/json',
+          'HTTP-Referer': 'https://hustlebot.io',
+          'X-Title': 'HustleBot Content Factory'
         },
         body: JSON.stringify({
-          version: 'a45f82a1d50fab339e7d4bcd5880e71bccc53aa60c169587d4ec8128cac00652', // Stable Diffusion 3
-          input: {
-            prompt: enhancedPrompt,
-            aspect_ratio: '16:9',
-            output_quality: 85,
-            num_outputs: 1
-          }
+          model: 'openai/dall-e-3', // or 'stability-ai/stable-diffusion-3' for alternatives
+          prompt: enhancedPrompt,
+          size: '1024x1024', // OpenRouter standard size
+          quality: 'hd',
+          n: 1
         })
       });
 
       if (!response.ok) {
-        throw new Error(`Replicate API error: ${response.statusText}`);
+        const error = await response.text();
+        throw new Error(`OpenRouter API error: ${response.statusText} - ${error}`);
       }
 
-      const prediction = await response.json();
+      const result = await response.json();
 
-      // Poll for completion
-      let completed = false;
-      let attempts = 0;
-      const maxAttempts = 60; // 5 minutes with 5-second intervals
-
-      while (!completed && attempts < maxAttempts) {
-        const statusResponse = await fetch(
-          `https://api.replicate.com/v1/predictions/${prediction.id}`,
-          {
-            headers: { 'Authorization': `Token ${this.replicateToken}` }
-          }
-        );
-
-        const status = await statusResponse.json();
-
-        if (status.status === 'succeeded') {
-          const imageUrl = status.output?.[0];
-          if (!imageUrl) throw new Error('No image output from Replicate');
-
-          return {
-            url: imageUrl,
-            prompt,
-            provider: 'replicate',
-            alt: prompt,
-            generatedAt: new Date()
-          };
-        } else if (status.status === 'failed') {
-          throw new Error(`Replicate generation failed: ${status.error}`);
-        }
-
-        // Wait 5 seconds before polling again
-        await new Promise(resolve => setTimeout(resolve, 5000));
-        attempts++;
+      if (!result.data || !result.data[0]?.url) {
+        throw new Error('No image URL in OpenRouter response');
       }
 
-      throw new Error('Replicate image generation timeout');
+      return {
+        url: result.data[0].url,
+        prompt,
+        provider: 'openrouter',
+        model: 'dall-e-3',
+        alt: prompt,
+        generatedAt: new Date()
+      };
     } catch (error) {
       logger.error(`Image generation failed: ${error.message}`);
       // Return placeholder on error
@@ -433,7 +414,7 @@ Make them engaging and platform-appropriate. Include hashtags where relevant.`;
   getStatus() {
     return {
       llmProvider: this.providers ? 'connected' : 'disconnected',
-      imageGeneration: this.replicateToken ? 'configured' : 'unconfigured',
+      imageGeneration: this.providers ? 'connected (via OpenRouter)' : 'disconnected',
       trendResearch: 'available',
       distribution: this.postizApiKey ? 'configured' : 'unconfigured',
       timestamp: new Date()
