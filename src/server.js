@@ -42,6 +42,8 @@ import { VoiceWorkflowBuilderAgent } from './agents/voice-workflow-builder-agent
 import { TranscriptProcessor } from './core/transcript-processor.js';
 import { VoiceWorkflowRefinerAgent } from './agents/voice-workflow-refiner-agent.js';
 import { WorkflowRefinementManager } from './core/workflow-refinement-manager.js';
+import { VoiceConversationAgent } from './agents/voice-conversation-agent.js';
+import { ConversationManager } from './core/conversation-manager.js';
 
 class HustleBotServer {
   constructor() {
@@ -81,6 +83,9 @@ class HustleBotServer {
     // Phase 7 Features
     this.voiceWorkflowRefiner = null;
     this.refinementManager = null;
+    // Phase 8 Features
+    this.voiceConversationAgent = null;
+    this.conversationManager = null;
   }
 
   async initialize() {
@@ -392,6 +397,24 @@ class HustleBotServer {
         logger.info('✅ Workflow Refinement Manager ready');
       } catch (error) {
         logger.warn('⚠️  Workflow Refinement Manager initialization failed, continuing:', error.message);
+      }
+
+      // Initialize Phase 8 Features (Voice Conversation Agent)
+      try {
+        logger.info('💬 Initializing Conversation Manager...');
+        this.conversationManager = new ConversationManager(this.workflowRegistry);
+        logger.info('✅ Conversation Manager ready');
+      } catch (error) {
+        logger.warn('⚠️  Conversation Manager initialization failed, continuing:', error.message);
+      }
+
+      try {
+        logger.info('🗣️  Initializing Voice Conversation Agent...');
+        this.voiceConversationAgent = new VoiceConversationAgent(this.voiceWorkflowRefiner);
+        await this.voiceConversationAgent.initialize(this.llm, this.providers);
+        logger.info('✅ Voice Conversation Agent ready');
+      } catch (error) {
+        logger.warn('⚠️  Voice Conversation Agent initialization failed, continuing:', error.message);
       }
 
       // Initialize Phase 5 Features
@@ -1915,6 +1938,165 @@ class HustleBotServer {
       });
     });
 
+    // Phase 8: Voice Conversation Agent routes
+    this.app.post('/api/conversations/start', async (req, res) => {
+      try {
+        if (!this.voiceConversationAgent || !this.conversationManager) {
+          return res.status(503).json({ error: 'Conversation system not initialized' });
+        }
+        const { workflowId, initialRequest, phoneNumber } = req.body;
+        const conversation = await this.conversationManager.createConversation(workflowId, initialRequest, phoneNumber);
+        const result = await this.voiceConversationAgent.startConversation({
+          workflowId,
+          initialRequest,
+          phoneNumber
+        });
+        res.json({ ...result, conversationId: conversation.id });
+      } catch (error) {
+        logger.error('Conversation start error:', error);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.post('/api/conversations/:conversationId/continue', async (req, res) => {
+      try {
+        if (!this.voiceConversationAgent || !this.conversationManager) {
+          return res.status(503).json({ error: 'Conversation system not initialized' });
+        }
+        const { conversationId } = req.params;
+        const { userInput } = req.body;
+        await this.conversationManager.addTurn(conversationId, 'user', userInput);
+        const result = await this.voiceConversationAgent.continueConversation({
+          conversationId,
+          userInput
+        });
+        await this.conversationManager.addTurn(conversationId, 'system', result.message, result);
+        res.json(result);
+      } catch (error) {
+        logger.error('Conversation continuation error:', error);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.post('/api/conversations/:conversationId/ask-clarification', async (req, res) => {
+      try {
+        if (!this.voiceConversationAgent || !this.conversationManager) {
+          return res.status(503).json({ error: 'Conversation system not initialized' });
+        }
+        const { conversationId } = req.params;
+        const { question, options } = req.body;
+        await this.conversationManager.addClarification(conversationId, question, options);
+        const result = await this.voiceConversationAgent.askClarification({
+          conversationId,
+          question,
+          options
+        });
+        res.json(result);
+      } catch (error) {
+        logger.error('Clarification error:', error);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.post('/api/conversations/:conversationId/confirm', async (req, res) => {
+      try {
+        if (!this.voiceConversationAgent || !this.conversationManager) {
+          return res.status(503).json({ error: 'Conversation system not initialized' });
+        }
+        const { conversationId } = req.params;
+        const { summary } = req.body;
+        await this.conversationManager.addConfirmation(conversationId, summary);
+        const result = await this.voiceConversationAgent.confirmRefinement({
+          conversationId,
+          summary
+        });
+        res.json(result);
+      } catch (error) {
+        logger.error('Confirmation error:', error);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.post('/api/conversations/:conversationId/apply', async (req, res) => {
+      try {
+        if (!this.voiceConversationAgent || !this.conversationManager) {
+          return res.status(503).json({ error: 'Conversation system not initialized' });
+        }
+        const { conversationId } = req.params;
+        const { autoPublish } = req.body || {};
+        const conversation = await this.conversationManager.getConversation(conversationId, true);
+        if (conversation?.context?.confirmations?.length > 0) {
+          const lastConfirm = conversation.context.confirmations[conversation.context.confirmations.length - 1];
+          await this.conversationManager.confirmRequest(conversationId, lastConfirm.id);
+        }
+        const result = await this.voiceConversationAgent.applyConversationRefinement({
+          conversationId,
+          autoPublish: autoPublish || false
+        });
+        res.json(result);
+      } catch (error) {
+        logger.error('Application error:', error);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.get('/api/conversations/:conversationId/state', async (req, res) => {
+      try {
+        if (!this.voiceConversationAgent || !this.conversationManager) {
+          return res.status(503).json({ error: 'Conversation system not initialized' });
+        }
+        const { conversationId } = req.params;
+        const state = await this.conversationManager.getConversationState(conversationId);
+        res.json(state);
+      } catch (error) {
+        logger.error('State retrieval error:', error);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.post('/api/conversations/:conversationId/end', async (req, res) => {
+      try {
+        if (!this.voiceConversationAgent || !this.conversationManager) {
+          return res.status(503).json({ error: 'Conversation system not initialized' });
+        }
+        const { conversationId } = req.params;
+        const { outcome } = req.body || {};
+        const result = await this.voiceConversationAgent.endConversation({
+          conversationId,
+          outcome: outcome || 'completed'
+        });
+        await this.conversationManager.endConversation(conversationId, outcome || 'completed');
+        res.json(result);
+      } catch (error) {
+        logger.error('End conversation error:', error);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.get('/api/conversations/:conversationId/history', async (req, res) => {
+      try {
+        if (!this.voiceConversationAgent || !this.conversationManager) {
+          return res.status(503).json({ error: 'Conversation system not initialized' });
+        }
+        const { conversationId } = req.params;
+        const history = await this.conversationManager.getConversationHistory(conversationId);
+        res.json(history);
+      } catch (error) {
+        logger.error('History retrieval error:', error);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.get('/api/conversations/status', (req, res) => {
+      if (!this.conversationManager) return res.status(503).json({ error: 'Conversation manager not initialized' });
+      res.json({
+        conversationManager: this.conversationManager.getStats(),
+        voiceConversationAgent: {
+          initialized: !!this.voiceConversationAgent
+        }
+      });
+    });
+
     // 404 handler
     this.app.use((req, res) => {
       res.status(404).json({
@@ -2107,10 +2289,29 @@ For more info, visit https://hustlebot.io
       process.exit(1);
     }
   }
+
+  getApp() {
+    return this.app;
+  }
 }
 
-// Start server
+// Initialize server
 const server = new HustleBotServer();
-server.start();
 
-export default server;
+// Check if running in Vercel (serverless environment)
+const isVercel = !!process.env.VERCEL;
+
+if (isVercel) {
+  // For Vercel serverless, initialize but don't listen
+  logger.info('🌐 Running in Vercel serverless environment');
+  server.initialize().catch(err => {
+    logger.error('Failed to initialize for Vercel:', err);
+    process.exit(1);
+  });
+} else {
+  // For local/traditional deployment, start the server normally
+  server.start();
+}
+
+// Export the app (works for both Vercel and regular servers)
+export default server.app;
