@@ -567,11 +567,6 @@ class TelegramCommandCenter {
 
   async handleAgentQuery(ctx, agent, agentName, description) {
     try {
-      if (!this.server?.mailbox) {
-        await ctx.reply('❌ Mailbox system not available');
-        return;
-      }
-
       const query = ctx.message.text.split(' ').slice(1).join(' ');
 
       if (!query) {
@@ -589,18 +584,31 @@ class TelegramCommandCenter {
       const waitMsg = await ctx.reply(`⏳ Sending query to ${agentName}...`);
 
       try {
-        const msgId = await this.server.mailbox.send(agent, {
-          type: 'query',
-          question: query,
-          timestamp: new Date().toISOString()
-        }, {
-          from: 'telegram',
-          ttl: 20000,
-          requiresAck: true
-        });
+        // Send message via mailbox Redis directly for better control
+        const redis = this.server?.mailbox?.redis;
+        if (!redis) {
+          await ctx.editMessageText('❌ Redis mailbox not available');
+          return;
+        }
 
-        // Try to get response (with timeout)
-        const response = await this.waitForAgentResponse(agent, msgId, 15000);
+        const msgId = `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        const message = {
+          id: msgId,
+          from: 'telegram',
+          to: agent,
+          subject: 'Telegram Query',
+          content: query,
+          timestamp: new Date().toISOString(),
+          read: false,
+          replies: []
+        };
+
+        // Push to agent's mailbox queue
+        await redis.rpush(`mailbox:${agent}:queue`, JSON.stringify(message));
+        logger.info(`[Telegram] Sent query to ${agent}: ${msgId}`);
+
+        // Wait for response from mailbox:telegram:queue
+        const response = await this.waitForAgentResponse(redis, msgId, agent, 15000);
 
         if (response) {
           await ctx.editMessageText(
@@ -613,7 +621,7 @@ class TelegramCommandCenter {
           await ctx.editMessageText(
             `${agentName}\n\n` +
             `Query sent but no response received within timeout.\n` +
-            `Please try again or check if agent is online.`
+            `Please try again or check if agent is online with /agents ping`
           );
         }
       } catch (error) {
@@ -629,30 +637,26 @@ class TelegramCommandCenter {
     }
   }
 
-  async waitForAgentResponse(agent, messageId, timeout = 15000) {
+  async waitForAgentResponse(redis, inReplyToId, agent, timeout = 15000) {
     const startTime = Date.now();
-    const pollInterval = 500;
+    const pollInterval = 1000;
 
     while (Date.now() - startTime < timeout) {
       try {
-        // Check if response exists in mailbox
-        const key = `response:${messageId}`;
-        if (this.server?.cache) {
-          const cached = await this.server.cache.get(key);
-          if (cached) {
-            return cached;
-          }
-        }
+        // Check mailbox:telegram:queue for responses
+        const messages = await redis.lrange('mailbox:telegram:queue', 0, 50);
 
-        // Check in Redis if available
-        if (this.server?.mailbox?.redis) {
-          const cached = await this.server.mailbox.redis.get(key);
-          if (cached) {
-            return cached;
+        for (const msgStr of messages) {
+          const msg = JSON.parse(msgStr);
+          // Look for a reply to our message
+          if (msg.inReplyTo === inReplyToId || msg.from === agent) {
+            // Found a response, remove it from queue
+            await redis.lrem('mailbox:telegram:queue', 1, msgStr);
+            return msg.content;
           }
         }
       } catch (error) {
-        // Ignore errors in checking cache
+        logger.error('Error waiting for response:', error);
       }
 
       await new Promise(resolve => setTimeout(resolve, pollInterval));
