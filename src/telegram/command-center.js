@@ -87,7 +87,7 @@ class TelegramCommandCenter {
     await ctx.reply(
       '🤖 *HustleBot v2 Command Center*\n\n' +
       'Choose an operation to get started:',
-      { ...keyboard, parse_mode: 'Markdown' }
+      { reply_markup: keyboard, parse_mode: 'Markdown' }
     );
   }
 
@@ -114,7 +114,7 @@ class TelegramCommandCenter {
     await ctx.reply(
       '📝 *Content Generation*\n\n' +
       'Select the type of content to generate:',
-      { ...keyboard, parse_mode: 'Markdown' }
+      { reply_markup: keyboard, parse_mode: 'Markdown' }
     );
   }
 
@@ -138,7 +138,7 @@ class TelegramCommandCenter {
     await ctx.reply(
       '🎯 *Lead Generation & Management*\n\n' +
       'Manage your leads and outreach campaigns:',
-      { ...keyboard, parse_mode: 'Markdown' }
+      { reply_markup: keyboard, parse_mode: 'Markdown' }
     );
   }
 
@@ -173,7 +173,7 @@ class TelegramCommandCenter {
         `🔄 *Workflow Automation*\n\n` +
         `Active workflows: ${workflowCount}\n\n` +
         'Automate your business processes:',
-        { ...keyboard, parse_mode: 'Markdown' }
+        { reply_markup: keyboard, parse_mode: 'Markdown' }
       );
     } catch (error) {
       logger.error('Error showing workflows menu:', error);
@@ -204,7 +204,7 @@ class TelegramCommandCenter {
     await ctx.reply(
       '📊 *Analytics & Reporting*\n\n' +
       'View performance metrics:',
-      { ...keyboard, parse_mode: 'Markdown' }
+      { reply_markup: keyboard, parse_mode: 'Markdown' }
     );
   }
 
@@ -244,7 +244,7 @@ class TelegramCommandCenter {
         `Workflows: ${status.workflows}\n` +
         `Agents: ${status.agents}`;
 
-      await ctx.reply(message, { ...keyboard, parse_mode: 'Markdown' });
+      await ctx.reply(message, { reply_markup: keyboard, parse_mode: 'Markdown' });
     } catch (error) {
       logger.error('Error showing system status:', error);
       await ctx.reply('❌ Error loading system status');
