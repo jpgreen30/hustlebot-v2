@@ -40,6 +40,8 @@ import { CostOptimizer } from './features/cost-optimizer.js';
 import { MemorySystem } from './features/memory-system.js';
 import { VoiceWorkflowBuilderAgent } from './agents/voice-workflow-builder-agent.js';
 import { TranscriptProcessor } from './core/transcript-processor.js';
+import { VoiceWorkflowRefinerAgent } from './agents/voice-workflow-refiner-agent.js';
+import { WorkflowRefinementManager } from './core/workflow-refinement-manager.js';
 
 class HustleBotServer {
   constructor() {
@@ -76,6 +78,9 @@ class HustleBotServer {
     // Phase 6 Features
     this.voiceWorkflowBuilder = null;
     this.transcriptProcessor = null;
+    // Phase 7 Features
+    this.voiceWorkflowRefiner = null;
+    this.refinementManager = null;
   }
 
   async initialize() {
@@ -366,6 +371,27 @@ class HustleBotServer {
         logger.info('✅ Transcript Processor ready');
       } catch (error) {
         logger.warn('⚠️  Transcript Processor initialization failed, continuing:', error.message);
+      }
+
+      // Initialize Phase 7 Features (Voice Workflow Refinement)
+      try {
+        logger.info('🔧 Initializing Voice Workflow Refiner Agent...');
+        this.voiceWorkflowRefiner = new VoiceWorkflowRefinerAgent(
+          this.workflowRegistry,
+          null
+        );
+        await this.voiceWorkflowRefiner.initialize(this.llm, this.providers);
+        logger.info('✅ Voice Workflow Refiner ready');
+      } catch (error) {
+        logger.warn('⚠️  Voice Workflow Refiner initialization failed, continuing:', error.message);
+      }
+
+      try {
+        logger.info('📋 Initializing Workflow Refinement Manager...');
+        this.refinementManager = new WorkflowRefinementManager(this.workflowRegistry);
+        logger.info('✅ Workflow Refinement Manager ready');
+      } catch (error) {
+        logger.warn('⚠️  Workflow Refinement Manager initialization failed, continuing:', error.message);
       }
 
       // Initialize Phase 5 Features
@@ -1733,6 +1759,158 @@ class HustleBotServer {
           integrations: {
             retell: !!this.retellIntegration
           }
+        }
+      });
+    });
+
+    // Phase 7: Voice Workflow Refinement routes
+    this.app.get('/api/refine/workflow/:workflowId', async (req, res) => {
+      try {
+        if (!this.voiceWorkflowRefiner) return res.status(503).json({ error: 'Refiner not initialized' });
+        const result = await this.voiceWorkflowRefiner.getWorkflowDetails({ workflowId: req.params.workflowId });
+        res.json(result);
+      } catch (error) {
+        logger.error('Workflow retrieval error:', error);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.post('/api/refine/workflow/:workflowId', async (req, res) => {
+      try {
+        if (!this.voiceWorkflowRefiner) return res.status(503).json({ error: 'Refiner not initialized' });
+        const result = await this.voiceWorkflowRefiner.modifyWorkflow({
+          workflowId: req.params.workflowId,
+          command: req.body.command,
+          parameters: req.body.parameters
+        });
+        res.json(result);
+      } catch (error) {
+        logger.error('Modification error:', error);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.post('/api/refine/workflow/:workflowId/add-step', async (req, res) => {
+      try {
+        if (!this.voiceWorkflowRefiner) return res.status(503).json({ error: 'Refiner not initialized' });
+        const result = await this.voiceWorkflowRefiner.addWorkflowStep({
+          workflowId: req.params.workflowId,
+          stepName: req.body.stepName,
+          integration: req.body.integration,
+          action: req.body.action,
+          position: req.body.position
+        });
+        res.json(result);
+      } catch (error) {
+        logger.error('Step addition error:', error);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.post('/api/refine/workflow/:workflowId/remove-step', async (req, res) => {
+      try {
+        if (!this.voiceWorkflowRefiner) return res.status(503).json({ error: 'Refiner not initialized' });
+        const result = await this.voiceWorkflowRefiner.removeWorkflowStep({
+          workflowId: req.params.workflowId,
+          stepId: req.body.stepId
+        });
+        res.json(result);
+      } catch (error) {
+        logger.error('Step removal error:', error);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.post('/api/refine/workflow/:workflowId/parameters', async (req, res) => {
+      try {
+        if (!this.voiceWorkflowRefiner) return res.status(503).json({ error: 'Refiner not initialized' });
+        const result = await this.voiceWorkflowRefiner.updateParameters({
+          workflowId: req.params.workflowId,
+          updates: req.body.updates
+        });
+        res.json(result);
+      } catch (error) {
+        logger.error('Parameter update error:', error);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.post('/api/refine/workflow/:workflowId/test', async (req, res) => {
+      try {
+        if (!this.voiceWorkflowRefiner) return res.status(503).json({ error: 'Refiner not initialized' });
+        const result = await this.voiceWorkflowRefiner.testWorkflow({
+          workflowId: req.params.workflowId,
+          testData: req.body.testData
+        });
+        res.json(result);
+      } catch (error) {
+        logger.error('Test error:', error);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.get('/api/refine/workflow/:workflowId/history', async (req, res) => {
+      try {
+        if (!this.voiceWorkflowRefiner) return res.status(503).json({ error: 'Refiner not initialized' });
+        const result = await this.voiceWorkflowRefiner.getExecutionHistory({
+          workflowId: req.params.workflowId,
+          limit: req.query.limit || 10
+        });
+        res.json(result);
+      } catch (error) {
+        logger.error('History retrieval error:', error);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.get('/api/refine/workflow/:workflowId/suggestions', async (req, res) => {
+      try {
+        if (!this.voiceWorkflowRefiner) return res.status(503).json({ error: 'Refiner not initialized' });
+        const result = await this.voiceWorkflowRefiner.suggestImprovements({
+          workflowId: req.params.workflowId,
+          analysisType: req.query.type || 'completeness'
+        });
+        res.json(result);
+      } catch (error) {
+        logger.error('Suggestion error:', error);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.post('/api/refine/workflow/:workflowId/rollback', async (req, res) => {
+      try {
+        if (!this.voiceWorkflowRefiner) return res.status(503).json({ error: 'Refiner not initialized' });
+        const result = await this.voiceWorkflowRefiner.rollbackWorkflow({
+          workflowId: req.params.workflowId,
+          versionId: req.body.versionId
+        });
+        res.json(result);
+      } catch (error) {
+        logger.error('Rollback error:', error);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.post('/api/refine/workflow/:workflowId/publish', async (req, res) => {
+      try {
+        if (!this.voiceWorkflowRefiner) return res.status(503).json({ error: 'Refiner not initialized' });
+        const result = await this.voiceWorkflowRefiner.publishRefinement({
+          workflowId: req.params.workflowId,
+          description: req.body.description
+        });
+        res.json(result);
+      } catch (error) {
+        logger.error('Publication error:', error);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.get('/api/refine/status', (req, res) => {
+      if (!this.refinementManager) return res.status(503).json({ error: 'Refinement manager not initialized' });
+      res.json({
+        refinementManager: this.refinementManager.getStats(),
+        voiceWorkflowRefiner: {
+          initialized: !!this.voiceWorkflowRefiner
         }
       });
     });
