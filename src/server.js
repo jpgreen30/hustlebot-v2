@@ -2391,6 +2391,7 @@ For more info, visit https://hustlebot.io
 // Initialize server
 let server;
 let app;
+let initError = null;
 
 try {
   console.log('[STARTUP] Creating HustleBotServer instance...');
@@ -2407,23 +2408,24 @@ try {
     server.start();
   } else {
     console.log('[STARTUP] Vercel serverless mode detected');
-  }
 
-  // Async initialization (background)
-  setTimeout(() => {
-    if (process.env.VERCEL && server && !server._initStarted) {
-      console.log('[STARTUP] Starting background initialization...');
-      server._initStarted = true;
-      server.initialize().catch(err => {
-        console.error('[STARTUP] Background init error:', err.message);
-      });
-    }
-  }, 100);
+    // Async initialization (background)
+    setTimeout(() => {
+      if (server && !server._initStarted) {
+        console.log('[STARTUP] Starting background initialization...');
+        server._initStarted = true;
+        server.initialize().catch(err => {
+          console.error('[STARTUP] Background init error:', err.message);
+        });
+      }
+    }, 100);
+  }
 
   console.log('[STARTUP] Ready to export app');
 } catch (error) {
   console.error('[STARTUP FATAL]', error.message);
   console.error('[STARTUP STACK]', error.stack);
+  initError = error;
 
   // Create minimal fallback app
   app = express();
@@ -2435,6 +2437,15 @@ try {
   });
 }
 
-// Export for Vercel
-console.log('[STARTUP] Exporting app...');
-export default app;
+// Export handler for Vercel
+console.log('[STARTUP] Creating export handler...');
+const handler = (req, res) => {
+  console.log('[REQUEST]', req.method, req.url);
+  if (app) {
+    return app(req, res);
+  }
+  res.status(503).json({ error: 'App not initialized' });
+};
+console.log('[STARTUP] Handler created');
+
+export default handler;
