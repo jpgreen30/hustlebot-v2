@@ -21,6 +21,24 @@ class BaseAgent {
   }
 
   /**
+   * Wire runtime dependencies after construction.
+   *
+   * Subclasses (voice workflow builder/refiner, conversation, call script
+   * writer) call super.initialize(llm, storage) before registering their
+   * tools. Without this method that call throws and the agent is skipped.
+   *
+   * Note: this deliberately does not touch this.db, which execute() uses
+   * for logAgentExecution.
+   */
+  async initialize(llm = null, storage = null) {
+    if (llm) this.llm = llm;
+    if (storage) this.storage = storage;
+    this.initialized = true;
+    logger.debug(`Agent ${this.name} initialized`);
+    return this;
+  }
+
+  /**
    * Main execution method - override in subclasses
    */
   async execute(input) {

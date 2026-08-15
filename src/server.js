@@ -2377,12 +2377,16 @@ class HustleBotServer {
           const { text } = await this.voice.speechToText(audioBuffer, 'audio/ogg');
           logger.info(`✅ Transcribed: "${text}"`);
 
+          if (!text) {
+            await ctx.reply("🎤 I couldn't make out any speech in that. Try again?");
+            return;
+          }
+
           // Show "typing" indicator
           await ctx.sendChatAction('typing');
 
-          // For now, just echo back the transcription
           logger.info('Sending transcription back...');
-          await ctx.reply(`🎤 You said: "${text}"\n\n(Full AI response coming soon...)`);
+          await ctx.reply(`🎤 You said: "${text}"`);
 
           // Try to get AI response (but don't fail if it doesn't work)
           try {
@@ -2395,6 +2399,29 @@ class HustleBotServer {
 
               logger.info(`✅ AI response ready: ${response.tokens.output} tokens`);
               await ctx.reply(`🤖 AI: ${response.content}`);
+
+              // Speak the answer back as a Telegram voice note.
+              // Text already went out above, so a TTS failure is not fatal.
+              try {
+                await ctx.sendChatAction('record_voice');
+                logger.info('Generating spoken reply...');
+
+                const speech = await this.voice.textToSpeech(response.content, {
+                  voice: process.env.DEEPGRAM_TTS_VOICE || 'aura-asteria-en',
+                  format: 'ogg'
+                });
+
+                await ctx.replyWithVoice({ source: speech.audioBuffer });
+                logger.info(`✅ Spoken reply sent (${speech.size} bytes)`);
+
+                if (speech.truncated) {
+                  await ctx.reply('_(spoken reply was shortened - full text above)_', {
+                    parse_mode: 'Markdown'
+                  });
+                }
+              } catch (ttsError) {
+                logger.error('Text-to-speech failed (non-fatal):', ttsError.message);
+              }
             } else {
               logger.warn('LLM not available');
             }

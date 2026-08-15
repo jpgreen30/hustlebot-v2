@@ -82,34 +82,71 @@ class DeepgramVoiceClient {
 
   /**
    * Convert text to speech
+   *
+   * format 'ogg'  -> opus in an ogg container (audio/ogg;codecs=opus).
+   *                  This is what Telegram voice notes require.
+   * format 'wav'  -> linear16 in a wav container, for generic audio players.
+   *
+   * Aura caps a single request at 2000 characters, so longer text is
+   * truncated at a sentence boundary rather than rejected outright.
    */
-  async textToSpeech(text, voice = 'aura-asteria-en') {
+  async textToSpeech(text, { voice = 'aura-asteria-en', format = 'ogg' } = {}) {
     try {
-      logger.info(`🔊 Converting text to speech (${voice})...`);
+      const spoken = this.truncateForSpeech(text);
+      logger.info(`🔊 Converting text to speech (${voice}, ${format}, ${spoken.length} chars)...`);
+
+      const mediaOptions = format === 'wav'
+        ? { encoding: 'linear16', container: 'wav' }
+        : { encoding: 'opus', container: 'ogg' };
 
       const response = await this.client.speak.request(
-        { text },
+        { text: spoken },
         {
           // In v3 the voice is the model
           model: voice,
-          encoding: 'linear16',
-          container: 'wav'
+          ...mediaOptions
         }
       );
 
       const stream = await response.getStream();
       const audioBuffer = await streamToBuffer(stream);
+
+      if (!audioBuffer.length) {
+        throw new Error('Deepgram returned an empty audio stream');
+      }
+
       logger.info(`✅ Speech generated (${audioBuffer.length} bytes)`);
 
       return {
         audioBuffer,
-        contentType: 'audio/wav',
-        size: audioBuffer.length
+        contentType: format === 'wav' ? 'audio/wav' : 'audio/ogg',
+        size: audioBuffer.length,
+        truncated: spoken.length < text.length
       };
     } catch (error) {
       logger.error(`Text-to-speech error: ${error.message}`);
       throw error;
     }
+  }
+
+  /**
+   * Keep TTS input under Aura's 2000 character limit, cutting at the last
+   * sentence end (or word break) so the audio doesn't stop mid-word.
+   */
+  truncateForSpeech(text, limit = 1900) {
+    if (text.length <= limit) return text;
+
+    const head = text.slice(0, limit);
+    const sentenceEnd = Math.max(
+      head.lastIndexOf('. '),
+      head.lastIndexOf('! '),
+      head.lastIndexOf('? ')
+    );
+
+    if (sentenceEnd > limit * 0.5) return head.slice(0, sentenceEnd + 1);
+
+    const wordBreak = head.lastIndexOf(' ');
+    return (wordBreak > 0 ? head.slice(0, wordBreak) : head) + '...';
   }
 
   /**
