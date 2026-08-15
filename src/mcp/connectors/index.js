@@ -9,6 +9,7 @@
 import 'dotenv/config';
 import { DeepSeekConnector } from './deepseek-connector.js';
 import { KimiConnector } from './kimi-connector.js';
+import { ChatGPTConnector } from './chatgpt-connector.js';
 
 class ConnectorsManager {
   constructor() {
@@ -47,6 +48,20 @@ class ConnectorsManager {
       console.error('[Connectors] ❌ Kimi connector failed:', error.message, '\n');
     }
 
+    // Initialize ChatGPT
+    try {
+      console.log('[Connectors] Setting up ChatGPT connector...');
+      const chatgpt = new ChatGPTConnector({
+        redisUrl: process.env.REDIS_URL,
+        openrouterKey: process.env.OPENROUTER_API_KEY,
+      });
+      await chatgpt.initialize();
+      this.connectors.push(chatgpt);
+      console.log('[Connectors] ✅ ChatGPT connector ready\n');
+    } catch (error) {
+      console.error('[Connectors] ❌ ChatGPT connector failed:', error.message, '\n');
+    }
+
     if (this.connectors.length === 0) {
       console.error('[Connectors] ❌ No connectors initialized');
       throw new Error('Failed to initialize any connectors');
@@ -71,6 +86,7 @@ class ConnectorsManager {
     console.log('[Connectors] 📊 Status:');
     console.log(`  • DeepSeek: Ready (chat/voice analysis)`);
     console.log(`  • Kimi: Ready (code reviews & architecture)`);
+    console.log(`  • ChatGPT: Ready (reasoning & collaboration)`);
     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
   }
 
