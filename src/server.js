@@ -2441,11 +2441,20 @@ class HustleBotServer {
     try {
       await this.initialize();
 
+      logger.info(`📡 Calling app.listen on port ${this.port}...`);
       this.server = this.app.listen(this.port, '0.0.0.0', () => {
         logger.info(`🚀 Server listening on port ${this.port}`);
         logger.info(`📊 Health check: http://localhost:${this.port}/health`);
         logger.info(`🌐 Status: http://localhost:${this.port}/api/status`);
       });
+
+      // Add error handler for listen
+      this.server.on('error', (err) => {
+        logger.error(`❌ Server listen error: ${err.message}`);
+        process.exit(1);
+      });
+
+      logger.info(`📡 app.listen() called, waiting for callback...`);
 
       // Graceful shutdown
       process.on('SIGINT', async () => {
