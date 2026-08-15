@@ -47,6 +47,13 @@ class TelegramCommandCenter {
       await this.showSystemStatus(ctx);
     });
 
+    // AI Agent Commands
+    this.bot.command('agents', this.handleAgentsCommand.bind(this));
+    this.bot.command('deepseek', this.handleDeepseekCommand.bind(this));
+    this.bot.command('kimi', this.handleKimiCommand.bind(this));
+    this.bot.command('chatgpt', this.handleChatgptCommand.bind(this));
+    this.bot.command('grok', this.handleGrokCommand.bind(this));
+
     // Inline query for search
     this.bot.on('inline_query', this.handleInlineQuery.bind(this));
 
@@ -490,6 +497,135 @@ class TelegramCommandCenter {
       `Admin action requested.\n\n` +
       `Please confirm or provide details.`
     );
+  }
+
+  async handleAgentsCommand(ctx) {
+    try {
+      const waitMsg = await ctx.reply('⏳ Checking agent status...');
+      try {
+        const redis = this.server?.mailbox?.redis;
+        if (!redis) {
+          await ctx.editMessageText('❌ Redis mailbox not available');
+          return;
+        }
+
+        const agents = ['deepseek', 'kimi', 'chatgpt', 'grok'];
+        const statusPromises = agents.map(async (agent) => {
+          const msgId = `ping_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+          const message = {
+            id: msgId,
+            from: 'telegram',
+            to: agent,
+            subject: 'Ping',
+            content: 'ping',
+            timestamp: new Date().toISOString()
+          };
+
+          await redis.rpush(`mailbox:${agent}:queue`, JSON.stringify(message));
+          const response = await this.waitForAgentResponse(redis, msgId, agent, 3000);
+          return { agent, online: !!response };
+        });
+
+        const results = await Promise.all(statusPromises);
+        const status = results.map(r => r.online ? `✅ ${r.agent}` : `❌ ${r.agent}`).join('\n');
+
+        await ctx.editMessageText(`🤖 *Agent Status*\n\n${status}`);
+      } catch (error) {
+        await ctx.editMessageText(`❌ Error: ${error.message}`);
+      }
+    } catch (error) {
+      logger.error('Error in agents command:', error);
+      await ctx.reply('❌ Error: ' + error.message);
+    }
+  }
+
+  async handleDeepseekCommand(ctx) {
+    await this.handleAgentQuery(ctx, 'deepseek', '🧠 DeepSeek', 'Advanced reasoning and detailed analysis');
+  }
+
+  async handleKimiCommand(ctx) {
+    await this.handleAgentQuery(ctx, 'kimi', '💻 Kimi', 'Code reviews and technical architecture');
+  }
+
+  async handleChatgptCommand(ctx) {
+    await this.handleAgentQuery(ctx, 'chatgpt', '🤝 ChatGPT', 'General questions and reasoning');
+  }
+
+  async handleGrokCommand(ctx) {
+    await this.handleAgentQuery(ctx, 'grok', '⚡ Grok', 'Creative thinking and unconventional insights');
+  }
+
+  async handleAgentQuery(ctx, agent, agentName, description) {
+    try {
+      const query = ctx.message.text.split(' ').slice(1).join(' ');
+      if (!query) {
+        await ctx.reply(`${agentName}\n\n${description}\n\nUsage: /${agent} [your question here]...`);
+        return;
+      }
+
+      const waitMsg = await ctx.reply(`⏳ Sending query to ${agentName}...`);
+      try {
+        const redis = this.server?.mailbox?.redis;
+        if (!redis) {
+          await ctx.editMessageText('❌ Redis mailbox not available');
+          return;
+        }
+
+        const msgId = `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        const message = {
+          id: msgId,
+          from: 'telegram',
+          to: agent,
+          subject: 'Telegram Query',
+          content: query,
+          timestamp: new Date().toISOString(),
+          read: false,
+          replies: []
+        };
+
+        await redis.rpush(`mailbox:${agent}:queue`, JSON.stringify(message));
+        const response = await this.waitForAgentResponse(redis, msgId, agent, 15000);
+
+        if (response) {
+          await ctx.editMessageText(
+            `${agentName}\n\n*Your Query:*\n${query}\n\n*Response:*\n${response}`,
+            { parse_mode: 'Markdown' }
+          );
+        } else {
+          await ctx.editMessageText(`${agentName}\n\nQuery sent but no response received within timeout...`);
+        }
+      } catch (error) {
+        await ctx.editMessageText(`❌ ${agentName} Error\n\nFailed to reach agent: ${error.message}...`);
+      }
+    } catch (error) {
+      logger.error(`Error in ${agent} command:`, error);
+      await ctx.reply('❌ Error: ' + error.message);
+    }
+  }
+
+  async waitForAgentResponse(redis, msgId, agent, timeout = 10000) {
+    const startTime = Date.now();
+
+    while (Date.now() - startTime < timeout) {
+      try {
+        const messages = await redis.lrange(`mailbox:telegram:queue`, 0, -1);
+
+        for (const msgStr of messages) {
+          const msg = JSON.parse(msgStr);
+          if (msg.inReplyTo === msgId && msg.from === agent) {
+            await redis.lrem(`mailbox:telegram:queue`, 1, msgStr);
+            return msg.content;
+          }
+        }
+
+        await new Promise(resolve => setTimeout(resolve, 500));
+      } catch (error) {
+        logger.error('Error waiting for response:', error);
+        throw error;
+      }
+    }
+
+    return null;
   }
 }
 
