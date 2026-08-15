@@ -2441,7 +2441,7 @@ class HustleBotServer {
     try {
       await this.initialize();
 
-      this.server = this.app.listen(this.port, () => {
+      this.server = this.app.listen(this.port, '0.0.0.0', () => {
         logger.info(`🚀 Server listening on port ${this.port}`);
         logger.info(`📊 Health check: http://localhost:${this.port}/health`);
         logger.info(`🌐 Status: http://localhost:${this.port}/api/status`);
