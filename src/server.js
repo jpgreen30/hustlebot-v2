@@ -2525,30 +2525,18 @@ try {
   app = server.app;
   console.log('[STARTUP] App reference set');
 
-  // Local start
-  console.log('[STARTUP] VERCEL env:', process.env.VERCEL ? 'YES' : 'NOT SET');
-  console.log('[STARTUP] Platform detection: ' + (!process.env.VERCEL ? 'Local/Render' : 'Vercel'));
+  // Local start - ALWAYS use server mode on Render
+  logger.info(`[STARTUP] VERCEL env var: "${process.env.VERCEL}"`);
+  logger.info(`[STARTUP] NODE_ENV: "${process.env.NODE_ENV}"`);
+  logger.info(`[STARTUP] Platform: Render (forcing server mode)`);
 
-  if (!process.env.VERCEL) {
-    console.log('[STARTUP] Starting server (local mode)...');
-    server.start().catch(err => {
-      console.error('[STARTUP] Server start error:', err.message);
-      process.exit(1);
-    });
-  } else {
-    console.log('[STARTUP] Vercel serverless mode detected');
-
-    // Async initialization (background)
-    setTimeout(() => {
-      if (server && !server._initStarted) {
-        console.log('[STARTUP] Starting background initialization...');
-        server._initStarted = true;
-        server.initialize().catch(err => {
-          console.error('[STARTUP] Background init error:', err.message);
-        });
-      }
-    }, 100);
-  }
+  // Always start server (even on Render, we need to listen on a port)
+  logger.info('[STARTUP] ⏳ Starting server in listen mode...');
+  server.start().catch(err => {
+    logger.error('[STARTUP] Server start error:', err.message);
+    logger.error('[STARTUP] Error stack:', err.stack);
+    process.exit(1);
+  });
 
   console.log('[STARTUP] Ready to export app');
 } catch (error) {
