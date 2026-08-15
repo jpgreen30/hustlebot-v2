@@ -2518,6 +2518,9 @@ try {
   console.log('[STARTUP] App reference set');
 
   // Local start
+  console.log('[STARTUP] VERCEL env:', process.env.VERCEL ? 'YES' : 'NOT SET');
+  console.log('[STARTUP] Platform detection: ' + (!process.env.VERCEL ? 'Local/Render' : 'Vercel'));
+
   if (!process.env.VERCEL) {
     console.log('[STARTUP] Starting server (local mode)...');
     server.start().catch(err => {
