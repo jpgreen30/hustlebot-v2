@@ -15,6 +15,16 @@ import cors from 'cors';
 import logger from './utils/logger.js';
 import { ProviderAbstraction } from './core/provider-abstraction.js';
 import { ContentFactory } from './factories/content-factory.js';
+import { EmailFactory } from './factories/email-factory.js';
+import { LeadFactory } from './factories/lead-factory.js';
+import { KnowledgeFactory } from './factories/knowledge-factory.js';
+import { SiteFactory } from './factories/site-factory.js';
+import { VideoFactory } from './factories/video-factory.js';
+import { CommerceFactory } from './factories/commerce-factory.js';
+import { BrandFactory } from './factories/brand-factory.js';
+import { Mailbox } from './core/mailbox.js';
+import { WorkflowRegistry } from './core/workflow-registry.js';
+import { N8NIntegration } from './integrations/n8n-integration.js';
 
 class HustleBotServer {
   constructor() {
@@ -23,6 +33,16 @@ class HustleBotServer {
     this.port = process.env.PORT || 3000;
     this.providers = null;
     this.contentFactory = null;
+    this.emailFactory = null;
+    this.leadFactory = null;
+    this.knowledgeFactory = null;
+    this.siteFactory = null;
+    this.videoFactory = null;
+    this.commerceFactory = null;
+    this.brandFactory = null;
+    this.mailbox = null;
+    this.workflowRegistry = null;
+    this.n8nIntegration = null;
   }
 
   async initialize() {
@@ -81,6 +101,25 @@ class HustleBotServer {
         logger.warn('⚠️  Provider abstraction initialization failed, continuing:', error.message);
       }
 
+      // Initialize Mailbox and Workflow Registry (core systems)
+      try {
+        logger.info('📬 Initializing Mailbox system...');
+        this.mailbox = new Mailbox({ db: this.db });
+        await this.mailbox.initialize();
+        logger.info('✅ Mailbox ready');
+      } catch (error) {
+        logger.warn('⚠️  Mailbox initialization failed, continuing:', error.message);
+      }
+
+      try {
+        logger.info('🔄 Initializing Workflow Registry...');
+        this.workflowRegistry = new WorkflowRegistry({ db: this.db });
+        await this.workflowRegistry.initialize();
+        logger.info('✅ Workflow Registry ready');
+      } catch (error) {
+        logger.warn('⚠️  Workflow Registry initialization failed, continuing:', error.message);
+      }
+
       // Initialize Content Factory
       try {
         logger.info('📝 Initializing Content Factory...');
@@ -97,6 +136,100 @@ class HustleBotServer {
         logger.info('✅ Content Factory ready');
       } catch (error) {
         logger.warn('⚠️  Content Factory initialization failed, continuing:', error.message);
+      }
+
+      // Initialize Phase 2 Factories
+      try {
+        logger.info('📧 Initializing Email Factory...');
+        this.emailFactory = new EmailFactory({
+          db: this.db,
+          domainContext: process.env.CONTENT_DOMAIN || 'parenting and family wellness'
+        });
+        await this.emailFactory.initialize();
+        logger.info('✅ Email Factory ready');
+      } catch (error) {
+        logger.warn('⚠️  Email Factory initialization failed, continuing:', error.message);
+      }
+
+      try {
+        logger.info('🎯 Initializing Lead Factory...');
+        this.leadFactory = new LeadFactory({
+          db: this.db
+        });
+        await this.leadFactory.initialize();
+        logger.info('✅ Lead Factory ready');
+      } catch (error) {
+        logger.warn('⚠️  Lead Factory initialization failed, continuing:', error.message);
+      }
+
+      // Initialize Phase 3 Factories
+      try {
+        logger.info('🧠 Initializing Knowledge Factory...');
+        this.knowledgeFactory = new KnowledgeFactory({
+          db: this.db
+        });
+        await this.knowledgeFactory.initialize();
+        logger.info('✅ Knowledge Factory ready');
+      } catch (error) {
+        logger.warn('⚠️  Knowledge Factory initialization failed, continuing:', error.message);
+      }
+
+      try {
+        logger.info('🌐 Initializing Site Factory...');
+        this.siteFactory = new SiteFactory({
+          db: this.db,
+          llm: this.llm,
+          imageGenerator: this.providers
+        });
+        await this.siteFactory.initialize();
+        logger.info('✅ Site Factory ready');
+      } catch (error) {
+        logger.warn('⚠️  Site Factory initialization failed, continuing:', error.message);
+      }
+
+      try {
+        logger.info('🎬 Initializing Video Factory...');
+        this.videoFactory = new VideoFactory({
+          db: this.db,
+          llm: this.llm
+        });
+        await this.videoFactory.initialize();
+        logger.info('✅ Video Factory ready');
+      } catch (error) {
+        logger.warn('⚠️  Video Factory initialization failed, continuing:', error.message);
+      }
+
+      try {
+        logger.info('🛒 Initializing Commerce Factory...');
+        this.commerceFactory = new CommerceFactory({
+          db: this.db
+        });
+        await this.commerceFactory.initialize();
+        logger.info('✅ Commerce Factory ready');
+      } catch (error) {
+        logger.warn('⚠️  Commerce Factory initialization failed, continuing:', error.message);
+      }
+
+      try {
+        logger.info('🎨 Initializing Brand Factory...');
+        this.brandFactory = new BrandFactory({
+          db: this.db,
+          imageGenerator: this.providers
+        });
+        await this.brandFactory.initialize();
+        logger.info('✅ Brand Factory ready');
+      } catch (error) {
+        logger.warn('⚠️  Brand Factory initialization failed, continuing:', error.message);
+      }
+
+      // Initialize n8n Integration
+      try {
+        logger.info('🔗 Initializing n8n Integration...');
+        this.n8nIntegration = new N8NIntegration();
+        await this.n8nIntegration.initialize();
+        logger.info('✅ n8n Integration ready');
+      } catch (error) {
+        logger.warn('⚠️  n8n Integration initialization failed, continuing:', error.message);
       }
 
       // Try to initialize Telegram bot (graceful failure)
@@ -173,7 +306,20 @@ class HustleBotServer {
         voice: this.voice ? 'ready' : 'unavailable',
         providers: providerStatus,
         storage: storageStatus,
-        content_factory: contentStatus,
+        factories: {
+          content: this.contentFactory ? 'ready' : 'unavailable',
+          email: this.emailFactory ? 'ready' : 'unavailable',
+          lead: this.leadFactory ? 'ready' : 'unavailable',
+          knowledge: this.knowledgeFactory ? 'ready' : 'unavailable',
+          site: this.siteFactory ? 'ready' : 'unavailable',
+          video: this.videoFactory ? 'ready' : 'unavailable',
+          commerce: this.commerceFactory ? 'ready' : 'unavailable',
+          brand: this.brandFactory ? 'ready' : 'unavailable'
+        },
+        systems: {
+          mailbox: this.mailbox ? 'ready' : 'unavailable',
+          workflows: this.workflowRegistry ? 'ready' : 'unavailable'
+        },
         bot_token_set: !!process.env.TELEGRAM_BOT_TOKEN,
         deepgram_key_set: !!process.env.DEEPGRAM_API_KEY,
         features: {
@@ -182,7 +328,15 @@ class HustleBotServer {
           voice_messages: !!this.voice,
           image_generation: !!this.llm,
           streaming: !!this.providers,
-          content_generation: !!this.contentFactory
+          content_generation: !!this.contentFactory,
+          email_automation: !!this.emailFactory,
+          lead_generation: !!this.leadFactory,
+          site_building: !!this.siteFactory,
+          video_generation: !!this.videoFactory,
+          ecommerce: !!this.commerceFactory,
+          brand_management: !!this.brandFactory,
+          agent_coordination: !!this.mailbox,
+          workflow_automation: !!this.workflowRegistry
         },
         timestamp: new Date().toISOString()
       });
@@ -333,6 +487,421 @@ class HustleBotServer {
       }
     });
 
+    // Email Factory endpoints
+    this.app.post('/api/email/create-sequence', async (req, res) => {
+      try {
+        if (!this.emailFactory) {
+          return res.status(503).json({ error: 'Email Factory not initialized' });
+        }
+
+        const { sequenceType = 'onboarding', context = {} } = req.body;
+        const result = await this.emailFactory.createSequence(sequenceType, context);
+        res.json(result);
+      } catch (error) {
+        logger.error(`Email sequence error: ${error.message}`);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.post('/api/email/generate', async (req, res) => {
+      try {
+        if (!this.emailFactory) {
+          return res.status(503).json({ error: 'Email Factory not initialized' });
+        }
+
+        const { template = 'welcome', recipient = {}, context = {} } = req.body;
+        const result = await this.emailFactory.generateEmail(template, recipient, context);
+        res.json(result);
+      } catch (error) {
+        logger.error(`Email generation error: ${error.message}`);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.post('/api/email/send', async (req, res) => {
+      try {
+        if (!this.emailFactory) {
+          return res.status(503).json({ error: 'Email Factory not initialized' });
+        }
+
+        const { email, options = {} } = req.body;
+        const result = await this.emailFactory.sendEmail(email, options);
+        res.json(result);
+      } catch (error) {
+        logger.error(`Email send error: ${error.message}`);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.get('/api/email/status', (req, res) => {
+      if (!this.emailFactory) {
+        return res.status(503).json({ error: 'Email Factory not initialized' });
+      }
+      res.json(this.emailFactory.getStatus());
+    });
+
+    // Lead Factory endpoints
+    this.app.post('/api/leads/process', async (req, res) => {
+      try {
+        if (!this.leadFactory) {
+          return res.status(503).json({ error: 'Lead Factory not initialized' });
+        }
+
+        const { source, criteria = {} } = req.body;
+        const result = await this.leadFactory.processLeads(source, criteria);
+        res.json(result);
+      } catch (error) {
+        logger.error(`Lead processing error: ${error.message}`);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.get('/api/leads/status', (req, res) => {
+      if (!this.leadFactory) {
+        return res.status(503).json({ error: 'Lead Factory not initialized' });
+      }
+      res.json(this.leadFactory.getStatus());
+    });
+
+    // Knowledge Factory endpoints
+    this.app.post('/api/knowledge/add-memory', async (req, res) => {
+      try {
+        if (!this.knowledgeFactory) {
+          return res.status(503).json({ error: 'Knowledge Factory not initialized' });
+        }
+
+        const { entityId, memory, metadata = {} } = req.body;
+        const result = await this.knowledgeFactory.addMemory(entityId, memory, metadata);
+        res.json(result);
+      } catch (error) {
+        logger.error(`Memory add error: ${error.message}`);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.post('/api/knowledge/search', async (req, res) => {
+      try {
+        if (!this.knowledgeFactory) {
+          return res.status(503).json({ error: 'Knowledge Factory not initialized' });
+        }
+
+        const { query, entityId = null } = req.body;
+        const result = await this.knowledgeFactory.searchKnowledge(query, entityId);
+        res.json(result);
+      } catch (error) {
+        logger.error(`Knowledge search error: ${error.message}`);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.get('/api/knowledge/status', (req, res) => {
+      if (!this.knowledgeFactory) {
+        return res.status(503).json({ error: 'Knowledge Factory not initialized' });
+      }
+      res.json(this.knowledgeFactory.getStatus());
+    });
+
+    // Site Factory endpoints
+    this.app.post('/api/sites/generate', async (req, res) => {
+      try {
+        if (!this.siteFactory) {
+          return res.status(503).json({ error: 'Site Factory not initialized' });
+        }
+
+        const { topic, options = {} } = req.body;
+        const result = await this.siteFactory.generateLandingPage(topic, options);
+        res.json(result);
+      } catch (error) {
+        logger.error(`Site generation error: ${error.message}`);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.post('/api/sites/deploy', async (req, res) => {
+      try {
+        if (!this.siteFactory) {
+          return res.status(503).json({ error: 'Site Factory not initialized' });
+        }
+
+        const { pageId } = req.body;
+        const result = await this.siteFactory.deployPage(pageId);
+        res.json(result);
+      } catch (error) {
+        logger.error(`Site deployment error: ${error.message}`);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.get('/api/sites/status', (req, res) => {
+      if (!this.siteFactory) {
+        return res.status(503).json({ error: 'Site Factory not initialized' });
+      }
+      res.json(this.siteFactory.getStatus());
+    });
+
+    // Video Factory endpoints
+    this.app.post('/api/videos/generate-script', async (req, res) => {
+      try {
+        if (!this.videoFactory) {
+          return res.status(503).json({ error: 'Video Factory not initialized' });
+        }
+
+        const { topic, options = {} } = req.body;
+        const result = await this.videoFactory.generateScript(topic, options);
+        res.json(result);
+      } catch (error) {
+        logger.error(`Video script generation error: ${error.message}`);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.post('/api/videos/create', async (req, res) => {
+      try {
+        if (!this.videoFactory) {
+          return res.status(503).json({ error: 'Video Factory not initialized' });
+        }
+
+        const { scriptId } = req.body;
+        const result = await this.videoFactory.createVideo(scriptId);
+        res.json(result);
+      } catch (error) {
+        logger.error(`Video creation error: ${error.message}`);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.get('/api/videos/status', (req, res) => {
+      if (!this.videoFactory) {
+        return res.status(503).json({ error: 'Video Factory not initialized' });
+      }
+      res.json(this.videoFactory.getStatus());
+    });
+
+    // Commerce Factory endpoints
+    this.app.post('/api/commerce/create-product', async (req, res) => {
+      try {
+        if (!this.commerceFactory) {
+          return res.status(503).json({ error: 'Commerce Factory not initialized' });
+        }
+
+        const { productData = {} } = req.body;
+        const result = await this.commerceFactory.createProduct(productData);
+        res.json(result);
+      } catch (error) {
+        logger.error(`Product creation error: ${error.message}`);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.post('/api/commerce/process-order', async (req, res) => {
+      try {
+        if (!this.commerceFactory) {
+          return res.status(503).json({ error: 'Commerce Factory not initialized' });
+        }
+
+        const { cartId, customerData = {} } = req.body;
+        const result = await this.commerceFactory.processOrder(cartId, customerData);
+        res.json(result);
+      } catch (error) {
+        logger.error(`Order processing error: ${error.message}`);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.get('/api/commerce/analytics', async (req, res) => {
+      try {
+        if (!this.commerceFactory) {
+          return res.status(503).json({ error: 'Commerce Factory not initialized' });
+        }
+
+        const result = await this.commerceFactory.getRevenueAnalytics();
+        res.json(result);
+      } catch (error) {
+        logger.error(`Analytics error: ${error.message}`);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.get('/api/commerce/status', (req, res) => {
+      if (!this.commerceFactory) {
+        return res.status(503).json({ error: 'Commerce Factory not initialized' });
+      }
+      res.json(this.commerceFactory.getStatus());
+    });
+
+    // Brand Factory endpoints
+    this.app.post('/api/brand/create', async (req, res) => {
+      try {
+        if (!this.brandFactory) {
+          return res.status(503).json({ error: 'Brand Factory not initialized' });
+        }
+
+        const { brandData = {} } = req.body;
+        const result = await this.brandFactory.createBrand(brandData);
+        res.json(result);
+      } catch (error) {
+        logger.error(`Brand creation error: ${error.message}`);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.post('/api/brand/generate-guidelines', async (req, res) => {
+      try {
+        if (!this.brandFactory) {
+          return res.status(503).json({ error: 'Brand Factory not initialized' });
+        }
+
+        const { brandId } = req.body;
+        const result = await this.brandFactory.generateBrandGuidelines(brandId);
+        res.json(result);
+      } catch (error) {
+        logger.error(`Guidelines generation error: ${error.message}`);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.get('/api/brand/status', (req, res) => {
+      if (!this.brandFactory) {
+        return res.status(503).json({ error: 'Brand Factory not initialized' });
+      }
+      res.json(this.brandFactory.getStatus());
+    });
+
+    // Mailbox endpoints
+    this.app.post('/api/mailbox/send', async (req, res) => {
+      try {
+        if (!this.mailbox) {
+          return res.status(503).json({ error: 'Mailbox not initialized' });
+        }
+
+        const { to, message, options = {} } = req.body;
+        const result = await this.mailbox.send(to, message, options);
+        res.json(result);
+      } catch (error) {
+        logger.error(`Mailbox send error: ${error.message}`);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.get('/api/mailbox/receive/:queue', async (req, res) => {
+      try {
+        if (!this.mailbox) {
+          return res.status(503).json({ error: 'Mailbox not initialized' });
+        }
+
+        const result = await this.mailbox.receive(req.params.queue, req.query.limit || 10);
+        res.json(result);
+      } catch (error) {
+        logger.error(`Mailbox receive error: ${error.message}`);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.get('/api/mailbox/status', (req, res) => {
+      if (!this.mailbox) {
+        return res.status(503).json({ error: 'Mailbox not initialized' });
+      }
+      res.json(this.mailbox.getStats());
+    });
+
+    // Workflow Registry endpoints
+    this.app.post('/api/workflows/register', async (req, res) => {
+      try {
+        if (!this.workflowRegistry) {
+          return res.status(503).json({ error: 'Workflow Registry not initialized' });
+        }
+
+        const { workflowDef } = req.body;
+        const result = await this.workflowRegistry.registerWorkflow(workflowDef);
+        res.json(result);
+      } catch (error) {
+        logger.error(`Workflow registration error: ${error.message}`);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.post('/api/workflows/:workflowId/execute', async (req, res) => {
+      try {
+        if (!this.workflowRegistry) {
+          return res.status(503).json({ error: 'Workflow Registry not initialized' });
+        }
+
+        const { inputs = {} } = req.body;
+        const result = await this.workflowRegistry.executeWorkflow(req.params.workflowId, inputs);
+        res.json(result);
+      } catch (error) {
+        logger.error(`Workflow execution error: ${error.message}`);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.get('/api/workflows', async (req, res) => {
+      try {
+        if (!this.workflowRegistry) {
+          return res.status(503).json({ error: 'Workflow Registry not initialized' });
+        }
+
+        const result = await this.workflowRegistry.listWorkflows();
+        res.json(result);
+      } catch (error) {
+        logger.error(`Workflow list error: ${error.message}`);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.get('/api/workflows/status', (req, res) => {
+      if (!this.workflowRegistry) {
+        return res.status(503).json({ error: 'Workflow Registry not initialized' });
+      }
+      res.json(this.workflowRegistry.getStats());
+    });
+
+    // n8n Integration endpoints
+    this.app.post('/api/n8n/send-event', async (req, res) => {
+      try {
+        if (!this.n8nIntegration) {
+          return res.status(503).json({ error: 'n8n Integration not initialized' });
+        }
+
+        const { eventType, data = {}, options = {} } = req.body;
+        const result = await this.n8nIntegration.sendEvent(eventType, data, options);
+        res.json(result);
+      } catch (error) {
+        logger.error(`n8n event error: ${error.message}`);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.get('/api/n8n/test', async (req, res) => {
+      try {
+        if (!this.n8nIntegration) {
+          return res.status(503).json({ error: 'n8n Integration not initialized' });
+        }
+
+        const result = await this.n8nIntegration.testConnection();
+        res.json(result);
+      } catch (error) {
+        logger.error(`n8n test error: ${error.message}`);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.get('/api/n8n/history', (req, res) => {
+      if (!this.n8nIntegration) {
+        return res.status(503).json({ error: 'n8n Integration not initialized' });
+      }
+
+      const limit = parseInt(req.query.limit || 50);
+      res.json(this.n8nIntegration.getHistory(limit));
+    });
+
+    this.app.get('/api/n8n/status', (req, res) => {
+      if (!this.n8nIntegration) {
+        return res.status(503).json({ error: 'n8n Integration not initialized' });
+      }
+      res.json(this.n8nIntegration.getStatus());
+    });
+
     // Debug endpoint
     this.app.get('/api/debug', (req, res) => {
       res.json({
@@ -378,6 +947,59 @@ class HustleBotServer {
             queue_stats: 'GET /api/content/queue-stats',
             factory_status: 'GET /api/content/status',
             metrics: 'GET /api/content/metrics'
+          },
+          email_factory: {
+            create_sequence: 'POST /api/email/create-sequence',
+            generate: 'POST /api/email/generate',
+            send: 'POST /api/email/send',
+            status: 'GET /api/email/status'
+          },
+          lead_factory: {
+            process: 'POST /api/leads/process',
+            status: 'GET /api/leads/status'
+          },
+          knowledge_factory: {
+            add_memory: 'POST /api/knowledge/add-memory',
+            search: 'POST /api/knowledge/search',
+            status: 'GET /api/knowledge/status'
+          },
+          site_factory: {
+            generate: 'POST /api/sites/generate',
+            deploy: 'POST /api/sites/deploy',
+            status: 'GET /api/sites/status'
+          },
+          video_factory: {
+            generate_script: 'POST /api/videos/generate-script',
+            create: 'POST /api/videos/create',
+            status: 'GET /api/videos/status'
+          },
+          commerce_factory: {
+            create_product: 'POST /api/commerce/create-product',
+            process_order: 'POST /api/commerce/process-order',
+            analytics: 'GET /api/commerce/analytics',
+            status: 'GET /api/commerce/status'
+          },
+          brand_factory: {
+            create: 'POST /api/brand/create',
+            generate_guidelines: 'POST /api/brand/generate-guidelines',
+            status: 'GET /api/brand/status'
+          },
+          mailbox: {
+            send: 'POST /api/mailbox/send',
+            receive: 'GET /api/mailbox/receive/:queue',
+            status: 'GET /api/mailbox/status'
+          },
+          workflows: {
+            register: 'POST /api/workflows/register',
+            execute: 'POST /api/workflows/:workflowId/execute',
+            list: 'GET /api/workflows',
+            status: 'GET /api/workflows/status'
+          },
+          n8n_integration: {
+            send_event: 'POST /api/n8n/send-event',
+            test: 'GET /api/n8n/test',
+            history: 'GET /api/n8n/history',
+            status: 'GET /api/n8n/status'
           }
         }
       });
