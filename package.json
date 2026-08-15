@@ -13,6 +13,8 @@
     "mcp:validate": "node scripts/validate-tools.js",
     "db:migrate": "node scripts/migrate.js",
     "test": "node --test src/**/*.test.js",
+    "test:e2e": "node test-e2e.js",
+    "test:render": "node test-render-services.js",
     "lint": "eslint src/",
     "format": "prettier --write src/",
     "build:landing": "node scripts/build-landing-page.js"
