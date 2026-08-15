@@ -2511,7 +2511,10 @@ try {
   // Local start
   if (!process.env.VERCEL) {
     console.log('[STARTUP] Starting server (local mode)...');
-    server.start();
+    server.start().catch(err => {
+      console.error('[STARTUP] Server start error:', err.message);
+      process.exit(1);
+    });
   } else {
     console.log('[STARTUP] Vercel serverless mode detected');
 
