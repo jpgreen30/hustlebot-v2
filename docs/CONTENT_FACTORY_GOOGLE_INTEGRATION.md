@@ -2,11 +2,66 @@
 
 ## Overview
 
-The Content Factory can integrate with Google services to enhance content strategy and performance tracking. These integrations are **optional for MVP** but **highly recommended for production**.
+The Content Factory integrates with Google services via **SerpAPI** to enhance content strategy and performance tracking. SerpAPI provides unified access to Google Trends, Search, and News data with automatic fallback to placeholder data when unavailable.
 
-## Integration Points
+**Status:** ✅ **SerpAPI integration is live** - Configure `SERPAPI_API_KEY` for real Google data
+**Fallback:** Placeholder data available out-of-box for MVP development
 
-### 1. Google Trends API
+## Primary Integration: SerpAPI
+
+**Purpose:** Unified access to Google data across Trends, Search, and News
+
+**Setup:**
+```env
+SERPAPI_API_KEY=your_serpapi_api_key
+```
+
+**Features:**
+- Real-time Google Trends analysis (search volume, trend direction, related queries)
+- SERP competition analysis (top domains, snippet quality, result count)
+- Google News aggregation for current events
+- Automatic timeout handling (30 seconds per request)
+- Graceful fallback to placeholder data
+
+**Usage in Content Factory:**
+The `ContentIntegrations` class automatically uses SerpAPI when `SERPAPI_API_KEY` is configured:
+
+```javascript
+// researchTrends() automatically calls SerpAPI.getTrends()
+const trends = await this.integrations.researchTrends(topic);
+
+// Returns:
+{
+  topic,
+  timestamp,
+  sources: {
+    serpapi: { searchVolume, trend, keywords, relatedQueries },
+    keywords: [...],
+    searchInsights: { searchVolume, trend, competitionLevel },
+    relatedTopics: [...]
+  }
+}
+```
+
+**SerpAPI Response Examples:**
+
+Trends data includes:
+- `searchVolume`: Estimated monthly search volume (e.g., 25000)
+- `trend`: 'rising' | 'falling' | 'stable'
+- `keywords`: Related search queries
+- `relatedQueries`: Google Trends related queries
+
+Search results include:
+- `competitionLevel`: 'low' | 'medium' | 'high' based on snippet quality
+- `topDomains`: Top-ranking domains with appearance counts
+- `searchTime`: Google search execution time
+- `totalResults`: Total results available
+
+---
+
+## Additional Integration Points
+
+### 1. Google Trends (via SerpAPI)
 
 **Purpose:** Discover trending topics and keywords to inform content strategy.
 
@@ -14,59 +69,87 @@ The Content Factory can integrate with Google services to enhance content strate
 - Identify rising search topics in real-time
 - Understand seasonal patterns
 - Spot emerging opportunities in your niche
+- Get search volume estimates and trend direction
 
-**Setup:**
-```env
-GOOGLE_TRENDS_API_KEY=your_key_here
-```
+**Implementation Status:** ✅ **Live via SerpAPI**
 
-**Implementation Status:** Currently uses placeholder trend data. Real integration pending.
+**How it works:**
+When you call `researchTrends(topic)`, the Content Factory:
+1. Checks if `SERPAPI_API_KEY` is configured
+2. Calls `SerpAPI.getTrends()` for real Google Trends data
+3. Extracts search volume, trend direction, and related queries
+4. Falls back to placeholder data if SerpAPI is unavailable or times out
 
-**Usage in Content Factory:**
-```javascript
-// In researchTrends() method
-if (this.googleTrendsEnabled) {
-  const trends = await fetchGoogleTrends(topic);
-  return { ...trends, sources: { keywords: trends.keywords } };
+**Example output:**
+```json
+{
+  "topic": "pregnancy nutrition",
+  "searchVolume": 25000,
+  "trend": "rising",
+  "keywords": ["pregnancy nutrition", "pregnancy diet", "prenatal vitamins", ...],
+  "relatedQueries": ["healthy pregnancy foods", "pregnancy meal plan", ...],
+  "source": "serpapi_trends"
 }
 ```
 
 ---
 
-### 2. Google Search Console API
+### 2. Google Search (SERP Analysis via SerpAPI)
 
-**Purpose:** Analyze which pages rank for which keywords and get click-through data.
+**Purpose:** Analyze search results, competition, and ranking opportunities.
 
 **Benefits:**
-- Identify search queries driving traffic
-- Find low-hanging fruit (high position, low CTR)
-- Monitor keyword rankings over time
-- Detect issues with indexing
+- Identify competitor domains and their ranking positions
+- Analyze SERP competition levels based on snippet quality
+- Find keyword ranking opportunities
+- Monitor top-ranking content in your niche
 
-**Setup:**
+**Implementation Status:** ✅ **Live via SerpAPI**
+
+**How it works:**
+When conducting research, SerpAPI provides:
+- Top 20 organic search results
+- Competition level analysis (based on snippet length and count)
+- Top-ranking domains extracted from results
+- Search time and total results count
+
+**Example usage:**
+```javascript
+const serpData = await serpapi.getSearchResults('pregnancy nutrition');
+// Returns:
+{
+  topic: 'pregnancy nutrition',
+  totalResults: 45000000,
+  competitionLevel: 'high',
+  results: [
+    {
+      position: 1,
+      title: 'Nutrition During Pregnancy',
+      url: 'https://example.com/pregnancy-nutrition',
+      domain: 'example.com',
+      snippet: '...'
+    },
+    // ... more results
+  ],
+  topDomains: [
+    { domain: 'example.com', appearances: 3 },
+    { domain: 'health.org', appearances: 2 }
+  ]
+}
+```
+
+**Google Search Console Integration (Future):**
+For own-site ranking data, optional integration with Google Search Console API:
+
 ```env
 GOOGLE_SEARCH_CONSOLE_KEY=your_key_here
 ```
 
-**Implementation Status:** Ready to integrate via MCP server tools available in this environment.
-
-**Key Metrics to Track:**
+This would enhance `opportunityScoring()` with:
+- Current ranking positions
+- Click-through rates
 - Search impressions by query
-- Click-through rate (CTR)
-- Average position
 - Device breakdown
-
-**Usage Example:**
-```javascript
-// Could enhance opportunityScoring()
-const gscData = await getSearchConsoleData(topic);
-const opportunity = {
-  score: calculateScore(gscData),
-  searchVolume: gscData.impressions,
-  currentRanking: gscData.avgPosition,
-  ctrPotential: 1 - gscData.ctr // Low CTR = high opportunity
-};
-```
 
 ---
 
@@ -152,10 +235,43 @@ return {
 
 ## API Integration Instructions
 
-### Google Trends
+### SerpAPI (Primary - Recommended)
+
+SerpAPI provides unified access to Google Trends, Search, and News without managing individual Google Cloud projects.
+
+**Setup Steps:**
+1. Visit https://serpapi.com
+2. Sign up for free account (includes 100 free searches/month)
+3. Get your API key from dashboard
+4. Add to `.env`:
+   ```env
+   SERPAPI_API_KEY=your_serpapi_key
+   ```
+5. Test it:
+   ```bash
+   curl "https://serpapi.com/search?api_key=YOUR_KEY&engine=google_trends&q=pregnancy+nutrition"
+   ```
+
+**Pricing:**
+- Free tier: 100 searches/month
+- Paid: $10/month for 10,000 searches/month
+- Pay-as-you-go for higher volumes
+
+**Why SerpAPI:**
+✅ No Google Cloud project needed  
+✅ Unified API for Trends + Search + News  
+✅ Instant setup, no OAuth complexity  
+✅ Automatic fallback in Content Factory  
+✅ Great for MVP and production  
+
+---
+
+### Google Trends (Direct Integration - Alternative)
+
+If you prefer direct Google integration instead of SerpAPI:
 
 1. Create a Google Cloud project
-2. Enable Google Trends API (Note: No official API - use third-party)
+2. Enable Google Trends API (Note: No official API - use third-party libraries)
 3. Alternatives:
    - PyTrends (Python, unofficial)
    - trends-client npm package
@@ -232,17 +348,32 @@ const response = await client.runReport({
 
 ## Environment Variables
 
-Add these to `.env` to enable Google services:
+### Primary Integration (Recommended)
 
 ```env
-# Google Trends (Optional)
+# SERPAPI - Unified Google data (Trends, Search, News)
+# Get free key at https://serpapi.com
+SERPAPI_API_KEY=your_serpapi_key_here
+```
+
+This single key enables:
+- ✅ Google Trends data (search volume, trend direction, related queries)
+- ✅ Google Search results (SERP analysis, competition, top domains)
+- ✅ Google News (current events in your niche)
+
+### Optional: Google Services (Direct Integration)
+
+If you prefer direct Google APIs instead of SerpAPI:
+
+```env
+# Google Trends (Optional - requires third-party solution)
 GOOGLE_TRENDS_API_KEY=your_key_here
 
-# Google Search Console (Optional)
+# Google Search Console (Optional - for own-site ranking data)
 GOOGLE_SEARCH_CONSOLE_KEY=your_key_here
 GOOGLE_SEARCH_CONSOLE_PROPERTY=https://your-domain.com
 
-# Google Analytics 4 (Optional)
+# Google Analytics 4 (Optional - for engagement metrics)
 GA4_API_KEY=your_key_here
 GA4_PROPERTY_ID=123456789
 
@@ -250,23 +381,95 @@ GA4_PROPERTY_ID=123456789
 GOOGLE_SERVICE_ACCOUNT_JSON=path/to/credentials.json
 ```
 
+### Content Factory Configuration
+
+```env
+# Domain context for content generation
+CONTENT_DOMAIN=parenting and family wellness
+
+# Async job processing
+MAX_CONCURRENT_JOBS=3
+
+# API timeouts (milliseconds)
+CONTENT_CALL_TIMEOUT=30000
+```
+
 ---
 
 ## Testing Google Integration
 
-### Test without API keys (Current MVP):
+### Test 1: Without API Keys (Placeholder Data)
+Content Factory works out-of-box with placeholder data:
+
 ```bash
 curl -X POST http://localhost:3000/api/content/generate \
   -H "Content-Type: application/json" \
-  -d '{"topic": "pregnancy tips", "contentType": "guide"}'
+  -d '{"topic": "pregnancy nutrition", "contentType": "guide"}'
 ```
 
-Content Factory will use placeholder trend data and succeed.
+**Response:** Success with placeholder trends, search data, and generated content
 
-### Enable Google Services:
-1. Set environment variables with real API keys
-2. Content Factory will automatically detect and use them
-3. Monitor logs for "Fetching real ... data" messages
+### Test 2: With SerpAPI (Real Google Data)
+
+1. Get free SerpAPI key at https://serpapi.com
+2. Add to `.env`:
+   ```env
+   SERPAPI_API_KEY=your_key
+   ```
+3. Restart server
+4. Test trends endpoint:
+   ```bash
+   curl -X POST http://localhost:3000/api/content/generate-async \
+     -H "Content-Type: application/json" \
+     -d '{"topic": "pregnancy nutrition", "contentType": "guide"}'
+   ```
+5. Check job status:
+   ```bash
+   curl http://localhost:3000/api/content/job/JOBID
+   ```
+
+### Test 3: Monitor SerpAPI Usage
+
+The server logs will show:
+- `📊 Researching trends for: pregnancy nutrition`
+- `🔍 Fetching real Google Trends data from SerpAPI...` (if key configured)
+- `searchVolume: 25000, trend: rising` (real data from Google)
+
+Check SerpAPI dashboard to see API call counts and remaining quota.
+
+### Test 4: Async Content Generation
+
+For long-running content generation, use async endpoints:
+
+**Start generation:**
+```bash
+curl -X POST http://localhost:3000/api/content/generate-async \
+  -H "Content-Type: application/json" \
+  -d '{
+    "topic": "pregnancy nutrition",
+    "contentType": "guide",
+    "options": {}
+  }'
+```
+
+**Response:**
+```json
+{
+  "jobId": "job_xxx",
+  "status": "queued",
+  "message": "Content generation job started. Check status at /api/content/job/job_xxx"
+}
+```
+
+**Check status:**
+```bash
+curl http://localhost:3000/api/content/job/job_xxx
+```
+
+**Queue statistics:**
+```bash
+curl http://localhost:3000/api/content/queue-stats
+```
 
 ---
 
@@ -312,28 +515,59 @@ async function getCachedTrends(topic) {
 - Content generation uses mock data
 - Set `OPENROUTER_API_KEY` to enable real LLM
 
-### "Google Trends API error"
-- Check API key validity
-- Verify quota not exceeded
-- Falls back to placeholder trends
+### "SerpAPI timeout" or "SerpAPI error"
+- SerpAPI fell back to placeholder data
+- Check `SERPAPI_API_KEY` is valid at https://serpapi.com
+- Verify SerpAPI account has remaining quota
+- Content Factory continues to work with placeholder data
+
+### "OPENROUTER_API_KEY not configured"
+- Image generation falls back to placeholder
+- Set `OPENROUTER_API_KEY` to enable real images
+
+### "LLM provider not configured"
+- Content generation uses mock data
+- Set `OPENROUTER_API_KEY` to enable real LLM
 
 ---
 
 ## FAQ
 
 **Q: Do I need Google services to use Content Factory?**  
-A: No. The MVP works with placeholders. Google services enhance strategy but are optional.
+A: No. The MVP works with placeholders. SerpAPI enhances strategy but is optional. Content Factory has graceful fallback to placeholder data when SerpAPI is unavailable.
 
-**Q: Which should I set up first?**  
-A: 1. Google Search Console (highest value for keyword research)  
-2. GA4 (track content performance)  
-3. Google Trends (stay ahead of trends)
+**Q: SerpAPI vs. Direct Google Integration - which is better?**  
+A: **SerpAPI is recommended for most users:**
+- ✅ Single API key for Trends + Search + News
+- ✅ No Google Cloud project setup needed
+- ✅ Instant setup, no OAuth complexity
+- ✅ $0-$10/month depending on volume
+- ✅ Content Factory already integrated
+
+**Direct Google APIs** are better if:
+- You already have Google Cloud projects set up
+- You need own-site ranking data (Google Search Console)
+- You need detailed engagement metrics (Google Analytics 4)
+- You have enterprise volume and prefer direct billing
+
+**Q: What's the recommended setup order?**  
+A: 1. Get SerpAPI key (5 minutes at https://serpapi.com)  
+2. Add to `.env` and restart  
+3. (Optional) Add Google Search Console for your own site  
+4. (Optional) Add GA4 for engagement tracking
 
 **Q: Can I use Semrush instead?**  
-A: Yes! Set `SEMRUSH_API_KEY` for competitive analysis and keyword data.
+A: Yes! Set `SEMRUSH_API_KEY` for competitive analysis and keyword data. Semrush has more detailed competitor data but requires a paid subscription ($99+/month).
 
 **Q: How often should I sync Google data?**  
-A: Google Search Console: Daily, GA4: Hourly, Trends: Weekly.
+A: SerpAPI quotas are per-request:
+- Free tier: 100 searches/month
+- Paid tier: 10,000 searches/month
+- The Content Factory caches results per job to minimize API calls
+- Each content generation job typically makes 2-3 API calls (Trends + Search + News)
+
+**Q: What if SerpAPI quota is exceeded?**  
+A: Content Factory automatically falls back to placeholder data and logs a warning. Your content pipeline continues to work - you just get estimated data instead of real Google data. Upgrade to a paid SerpAPI plan when needed.
 
 ---
 
