@@ -8,13 +8,28 @@
  * 4. Gracefully handles failures
  */
 
+console.log('[IMPORT] Starting module imports...');
+
 import 'dotenv/config';
+console.log('[IMPORT] dotenv loaded');
+
 import express from 'express';
+console.log('[IMPORT] express loaded');
+
 import helmet from 'helmet';
+console.log('[IMPORT] helmet loaded');
+
 import cors from 'cors';
+console.log('[IMPORT] cors loaded');
+
 import logger from './utils/logger.js';
+console.log('[IMPORT] logger loaded');
+
 import { ProviderAbstraction } from './core/provider-abstraction.js';
+console.log('[IMPORT] ProviderAbstraction loaded');
+
 import { ContentFactory } from './factories/content-factory.js';
+console.log('[IMPORT] ContentFactory loaded');
 import { EmailFactory } from './factories/email-factory.js';
 import { LeadFactory } from './factories/lead-factory.js';
 import { KnowledgeFactory } from './factories/knowledge-factory.js';
