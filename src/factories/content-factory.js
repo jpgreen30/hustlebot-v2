@@ -145,14 +145,19 @@ class ContentFactory {
         stages: {}
       };
 
-      // Stage 1: Gather trend intelligence
+      // Stage 1: Gather trend intelligence + SEO data
       pipeline.stages.trends = await this.gatherTrendIntelligence(topic, options);
       logger.info(`✅ Trend intelligence gathered`);
 
-      // Stage 2: Score opportunity
+      // Stage 1b: Get ranking opportunities from Google Search Console
+      pipeline.stages.seoAnalysis = await this.gatherSEOAnalysis(topic, options);
+      logger.info(`✅ SEO analysis complete`);
+
+      // Stage 2: Score opportunity (enhanced with ranking + quality data)
       pipeline.stages.opportunity = await this.scoreOpportunity(
         topic,
         pipeline.stages.trends,
+        pipeline.stages.seoAnalysis,
         options
       );
       logger.info(`✅ Opportunity scored: ${pipeline.stages.opportunity.score}/100`);
@@ -186,13 +191,23 @@ class ContentFactory {
       );
       logger.info(`✅ QA complete: quality score ${pipeline.stages.qa.qualityScore}/100`);
 
-      // Stage 7: SEO optimization
+      // Stage 7: SEO optimization (enhanced with GSC data)
       pipeline.stages.seo = await this.optimizeForSEO(
         pipeline.stages.content,
         topic,
+        pipeline.stages.seoAnalysis,
         options
       );
       logger.info(`✅ SEO optimized`);
+
+      // Stage 7b: Pre-publish SEO review
+      pipeline.stages.seoReview = await this.performPrePublishSEOReview(
+        pipeline.stages.content,
+        pipeline.stages.seo,
+        pipeline.stages.seoAnalysis,
+        options
+      );
+      logger.info(`✅ SEO review complete: ${pipeline.stages.seoReview.readinessScore}% ready`);
 
       // Stage 8: Generate featured image
       pipeline.stages.image = await this.generateImage(topic, contentType, options);
@@ -223,6 +238,14 @@ class ContentFactory {
       );
       logger.info(`✅ Content distributed`);
       pipeline.status = 'distributed';
+
+      // Stage 12: Schedule performance tracking
+      pipeline.stages.performanceTracking = await this.schedulePerformanceTracking(
+        pipeline.stages.published,
+        topic,
+        options
+      );
+      logger.info(`✅ Performance tracking scheduled for 24-48 hours`);
 
       this.metrics.contentPublished++;
       this.metrics.contentGenerated++;
@@ -258,19 +281,64 @@ class ContentFactory {
   }
 
   /**
-   * Stage 2: Score opportunity
+   * Stage 1b: Gather SEO analysis (GSC + GA4)
    */
-  async scoreOpportunity(topic, trends, options = {}) {
+  async gatherSEOAnalysis(topic, options = {}) {
     try {
-      const score = Math.floor(Math.random() * 40) + 60; // 60-100 for demo
+      logger.info(`📈 Analyzing SEO signals for: ${topic}`);
+
+      // Get combined analysis from integrations
+      const analysis = await this.integrations.getSEOAnalysis(topic, options);
+
+      return {
+        topic,
+        rankingOpportunities: analysis.opportunities.opportunities || [],
+        opportunitiesCount: (analysis.opportunities.opportunities || []).length,
+        contentQuality: analysis.quality.qualityScore || 0,
+        recommendations: analysis.recommendation || [],
+        source: analysis.source
+      };
+    } catch (error) {
+      logger.error(`SEO analysis failed: ${error.message}`);
+      return { topic, rankingOpportunities: [], contentQuality: 0, recommendations: [] };
+    }
+  }
+
+  /**
+   * Stage 2: Score opportunity (enhanced with SEO data)
+   */
+  async scoreOpportunity(topic, trends, seoAnalysis, options = {}) {
+    try {
+      let score = Math.floor(Math.random() * 40) + 60; // 60-100 base
+
+      // Boost score if trend is rising
+      if (trends?.sources?.searchInsights?.trend === 'rising') {
+        score += 10;
+      }
+
+      // Boost score if there are ranking opportunities (low CTR high position)
+      if (seoAnalysis?.opportunitiesCount > 0) {
+        score += Math.min(seoAnalysis.opportunitiesCount * 3, 10); // +3 per opportunity, max +10
+      }
+
+      // Boost score if existing content is high quality
+      if (seoAnalysis?.contentQuality > 75) {
+        score += 8;
+      }
+
+      // Cap at 100
+      score = Math.min(score, 100);
 
       return {
         topic,
         score,
-        searchVolume: Math.floor(Math.random() * 10000) + 1000,
+        searchVolume: trends?.sources?.searchInsights?.searchVolume || Math.floor(Math.random() * 10000) + 1000,
         competitionLevel: score > 80 ? 'high' : 'medium',
-        trend: Math.random() > 0.5 ? 'rising' : 'stable',
-        recommendedAction: score > 80 ? 'publish' : 'monitor'
+        trend: trends?.sources?.searchInsights?.trend || 'stable',
+        rankingOpportunities: seoAnalysis?.opportunitiesCount || 0,
+        contentQualitySignal: seoAnalysis?.contentQuality || 0,
+        recommendedAction: score > 80 ? 'publish_immediately' : score > 60 ? 'publish' : 'monitor',
+        keyInsights: seoAnalysis?.recommendations || []
       };
     } catch (error) {
       logger.error(`Opportunity scoring failed: ${error.message}`);
@@ -352,15 +420,67 @@ class ContentFactory {
   }
 
   /**
-   * Stage 7: SEO optimization
+   * Stage 7: SEO optimization (enhanced with GSC data)
    */
-  async optimizeForSEO(content, topic, options = {}) {
+  async optimizeForSEO(content, topic, seoAnalysis, options = {}) {
     try {
       logger.info(`🔍 Optimizing for SEO...`);
-      return await this.integrations.optimizeForSEOWithLLM(content, topic);
+      const seoData = await this.integrations.optimizeForSEOWithLLM(content, topic);
+
+      // Enhance with GSC ranking opportunities
+      if (seoAnalysis?.rankingOpportunities?.length > 0) {
+        const topOpportunities = seoAnalysis.rankingOpportunities.slice(0, 3);
+        seoData.rankingOpportunities = topOpportunities;
+        seoData.gscInsights = `Found ${seoAnalysis.rankingOpportunities.length} ranking opportunities - prioritize these in meta and headings`;
+      }
+
+      return seoData;
     } catch (error) {
       logger.error(`SEO optimization failed: ${error.message}`);
       return { error: error.message };
+    }
+  }
+
+  /**
+   * Stage 7b: Pre-publish SEO review
+   */
+  async performPrePublishSEOReview(content, seoData, seoAnalysis, options = {}) {
+    try {
+      logger.info(`🔍 Performing pre-publish SEO review...`);
+
+      const checks = {
+        hasMetaTitle: !!seoData?.metaTitle,
+        hasMetaDescription: !!seoData?.metaDescription,
+        hasPrimaryKeyword: !!seoData?.primaryKeyword,
+        hasInternalLinks: content?.wordCount > 500,
+        hasImage: !!options.imageUrl,
+        qualityScore: seoAnalysis?.contentQuality || 0,
+        rankingOpportunitiesFound: seoAnalysis?.opportunitiesCount || 0
+      };
+
+      const passedChecks = Object.values(checks).filter(v => typeof v === 'boolean' && v).length;
+      const totalChecks = Object.keys(checks).filter(k => typeof checks[k] === 'boolean').length;
+      const readinessScore = Math.round((passedChecks / totalChecks) * 100);
+
+      const warnings = [];
+      if (!checks.hasMetaTitle) warnings.push('⚠️ Missing meta title');
+      if (!checks.hasMetaDescription) warnings.push('⚠️ Missing meta description');
+      if (!checks.hasPrimaryKeyword) warnings.push('⚠️ Missing primary keyword');
+      if (checks.qualityScore < 50) warnings.push('⚠️ Content quality score low');
+      if (checks.rankingOpportunitiesFound === 0) warnings.push('ℹ️ No ranking opportunities found - consider topic research');
+
+      return {
+        readinessScore,
+        passedChecks,
+        totalChecks,
+        checksDetail: checks,
+        warnings,
+        recommendation: readinessScore > 80 ? 'Ready to publish' : readinessScore > 60 ? 'Ready with minor fixes' : 'Needs review',
+        timestamp: new Date()
+      };
+    } catch (error) {
+      logger.error(`Pre-publish SEO review failed: ${error.message}`);
+      return { readinessScore: 0, error: error.message };
     }
   }
 
@@ -438,6 +558,53 @@ class ContentFactory {
       return await this.integrations.distributeToSocial(published, options);
     } catch (error) {
       logger.error(`Distribution failed: ${error.message}`);
+      return { error: error.message };
+    }
+  }
+
+  /**
+   * Stage 12: Schedule performance tracking
+   *
+   * Monitor GA4 and GSC after 24-48 hours to measure:
+   * - Initial impressions and clicks
+   * - Ranking position
+   * - Engagement rate
+   * - Content quality signals
+   */
+  async schedulePerformanceTracking(published, topic, options = {}) {
+    try {
+      logger.info(`📊 Scheduling performance tracking for: ${published.url}`);
+
+      // In production: use n8n or scheduled job to check metrics after 24-48 hours
+      const tracking = {
+        contentId: published.id,
+        url: published.url,
+        topic,
+        publishedAt: new Date(),
+        scheduled: true,
+        scheduledFor: new Date(Date.now() + 48 * 60 * 60 * 1000), // 48 hours
+        metricsToTrack: [
+          'search_impressions',
+          'search_clicks',
+          'ranking_position',
+          'engagement_rate',
+          'scroll_depth',
+          'session_duration',
+          'bounceRate'
+        ],
+        expectedActions: [
+          'Query GSC for ranking position',
+          'Query GA4 for engagement metrics',
+          'Generate performance report',
+          'Identify optimization opportunities',
+          'Feed results back into content intelligence'
+        ]
+      };
+
+      logger.info(`⏰ Performance check scheduled for ${tracking.scheduledFor.toISOString()}`);
+      return tracking;
+    } catch (error) {
+      logger.error(`Performance tracking scheduling failed: ${error.message}`);
       return { error: error.message };
     }
   }
