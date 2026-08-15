@@ -25,6 +25,18 @@ import { BrandFactory } from './factories/brand-factory.js';
 import { Mailbox } from './core/mailbox.js';
 import { WorkflowRegistry } from './core/workflow-registry.js';
 import { N8NIntegration } from './integrations/n8n-integration.js';
+import { PaymentIntegration } from './integrations/payment-integration.js';
+import { SocialIntegration } from './integrations/social-integration.js';
+import { ImageIntegration } from './integrations/image-integration.js';
+import { ShopifyIntegration } from './integrations/shopify-integration.js';
+import { EmailIntegration } from './integrations/email-integration.js';
+import { DeploymentIntegration } from './integrations/deployment-integration.js';
+import { ScrapingIntegration } from './integrations/scraping-integration.js';
+import { EnrichmentIntegration } from './integrations/enrichment-integration.js';
+import { SchedulingEngine } from './features/scheduling-engine.js';
+import { AnalyticsEngine } from './features/analytics-engine.js';
+import { CostOptimizer } from './features/cost-optimizer.js';
+import { MemorySystem } from './features/memory-system.js';
 
 class HustleBotServer {
   constructor() {
@@ -43,6 +55,20 @@ class HustleBotServer {
     this.mailbox = null;
     this.workflowRegistry = null;
     this.n8nIntegration = null;
+    // Phase 4 Integrations
+    this.paymentIntegration = null;
+    this.socialIntegration = null;
+    this.imageIntegration = null;
+    this.shopifyIntegration = null;
+    this.emailIntegration = null;
+    this.deploymentIntegration = null;
+    this.scrapingIntegration = null;
+    this.enrichmentIntegration = null;
+    // Phase 5 Features
+    this.schedulingEngine = null;
+    this.analyticsEngine = null;
+    this.costOptimizer = null;
+    this.memorySystem = null;
   }
 
   async initialize() {
@@ -232,6 +258,116 @@ class HustleBotServer {
         logger.warn('⚠️  n8n Integration initialization failed, continuing:', error.message);
       }
 
+      // Initialize Phase 4 Integrations
+      try {
+        logger.info('💳 Initializing Payment Integration...');
+        this.paymentIntegration = new PaymentIntegration();
+        await this.paymentIntegration.initialize();
+        logger.info('✅ Payment Integration ready');
+      } catch (error) {
+        logger.warn('⚠️  Payment Integration initialization failed, continuing:', error.message);
+      }
+
+      try {
+        logger.info('📱 Initializing Social Integration...');
+        this.socialIntegration = new SocialIntegration();
+        await this.socialIntegration.initialize();
+        logger.info('✅ Social Integration ready');
+      } catch (error) {
+        logger.warn('⚠️  Social Integration initialization failed, continuing:', error.message);
+      }
+
+      try {
+        logger.info('🖼️  Initializing Image Integration...');
+        this.imageIntegration = new ImageIntegration();
+        await this.imageIntegration.initialize();
+        logger.info('✅ Image Integration ready');
+      } catch (error) {
+        logger.warn('⚠️  Image Integration initialization failed, continuing:', error.message);
+      }
+
+      try {
+        logger.info('🛍️  Initializing Shopify Integration...');
+        this.shopifyIntegration = new ShopifyIntegration();
+        await this.shopifyIntegration.initialize();
+        logger.info('✅ Shopify Integration ready');
+      } catch (error) {
+        logger.warn('⚠️  Shopify Integration initialization failed, continuing:', error.message);
+      }
+
+      try {
+        logger.info('📧 Initializing Email Integration...');
+        this.emailIntegration = new EmailIntegration();
+        await this.emailIntegration.initialize();
+        logger.info('✅ Email Integration ready');
+      } catch (error) {
+        logger.warn('⚠️  Email Integration initialization failed, continuing:', error.message);
+      }
+
+      try {
+        logger.info('🚀 Initializing Deployment Integration...');
+        this.deploymentIntegration = new DeploymentIntegration();
+        await this.deploymentIntegration.initialize();
+        logger.info('✅ Deployment Integration ready');
+      } catch (error) {
+        logger.warn('⚠️  Deployment Integration initialization failed, continuing:', error.message);
+      }
+
+      try {
+        logger.info('🕷️  Initializing Scraping Integration...');
+        this.scrapingIntegration = new ScrapingIntegration();
+        await this.scrapingIntegration.initialize();
+        logger.info('✅ Scraping Integration ready');
+      } catch (error) {
+        logger.warn('⚠️  Scraping Integration initialization failed, continuing:', error.message);
+      }
+
+      try {
+        logger.info('🔍 Initializing Enrichment Integration...');
+        this.enrichmentIntegration = new EnrichmentIntegration();
+        await this.enrichmentIntegration.initialize();
+        logger.info('✅ Enrichment Integration ready');
+      } catch (error) {
+        logger.warn('⚠️  Enrichment Integration initialization failed, continuing:', error.message);
+      }
+
+      // Initialize Phase 5 Features
+      try {
+        logger.info('⏰ Initializing Scheduling Engine...');
+        this.schedulingEngine = new SchedulingEngine();
+        await this.schedulingEngine.initialize();
+        logger.info('✅ Scheduling Engine ready');
+      } catch (error) {
+        logger.warn('⚠️  Scheduling Engine initialization failed, continuing:', error.message);
+      }
+
+      try {
+        logger.info('📊 Initializing Analytics Engine...');
+        this.analyticsEngine = new AnalyticsEngine();
+        await this.analyticsEngine.initialize();
+        logger.info('✅ Analytics Engine ready');
+      } catch (error) {
+        logger.warn('⚠️  Analytics Engine initialization failed, continuing:', error.message);
+      }
+
+      try {
+        logger.info('💰 Initializing Cost Optimizer...');
+        this.costOptimizer = new CostOptimizer();
+        await this.costOptimizer.initialize();
+        logger.info('✅ Cost Optimizer ready');
+      } catch (error) {
+        logger.warn('⚠️  Cost Optimizer initialization failed, continuing:', error.message);
+      }
+
+      try {
+        logger.info('🧠 Initializing Memory System...');
+        this.memorySystem = new MemorySystem();
+        await this.memorySystem.initialize();
+        logger.info('✅ Memory System ready');
+      } catch (error) {
+        logger.warn('⚠️  Memory System initialization failed, continuing:', error.message);
+      }
+
       // Try to initialize Telegram bot (graceful failure)
       if (process.env.TELEGRAM_BOT_TOKEN) {
         try {
@@ -318,7 +454,24 @@ class HustleBotServer {
         },
         systems: {
           mailbox: this.mailbox ? 'ready' : 'unavailable',
-          workflows: this.workflowRegistry ? 'ready' : 'unavailable'
+          workflows: this.workflowRegistry ? 'ready' : 'unavailable',
+          n8n: this.n8nIntegration ? 'ready' : 'unavailable'
+        },
+        integrations: {
+          payment: this.paymentIntegration ? 'ready' : 'unavailable',
+          social: this.socialIntegration ? 'ready' : 'unavailable',
+          image: this.imageIntegration ? 'ready' : 'unavailable',
+          shopify: this.shopifyIntegration ? 'ready' : 'unavailable',
+          email: this.emailIntegration ? 'ready' : 'unavailable',
+          deployment: this.deploymentIntegration ? 'ready' : 'unavailable',
+          scraping: this.scrapingIntegration ? 'ready' : 'unavailable',
+          enrichment: this.enrichmentIntegration ? 'ready' : 'unavailable'
+        },
+        features: {
+          scheduling: this.schedulingEngine ? 'ready' : 'unavailable',
+          analytics: this.analyticsEngine ? 'ready' : 'unavailable',
+          cost_optimization: this.costOptimizer ? 'ready' : 'unavailable',
+          memory: this.memorySystem ? 'ready' : 'unavailable'
         },
         bot_token_set: !!process.env.TELEGRAM_BOT_TOKEN,
         deepgram_key_set: !!process.env.DEEPGRAM_API_KEY,
@@ -1000,9 +1153,387 @@ class HustleBotServer {
             test: 'GET /api/n8n/test',
             history: 'GET /api/n8n/history',
             status: 'GET /api/n8n/status'
+          },
+          integrations: {
+            payment: {
+              create_intent: 'POST /api/payments/create-intent',
+              confirm: 'POST /api/payments/confirm',
+              subscription: 'POST /api/payments/subscription',
+              status: 'GET /api/payments/status'
+            },
+            social: {
+              schedule_post: 'POST /api/social/schedule-post',
+              publish: 'POST /api/social/publish',
+              analytics: 'GET /api/social/analytics',
+              status: 'GET /api/social/status'
+            },
+            image: {
+              generate: 'POST /api/images/generate',
+              social_images: 'POST /api/images/social-images',
+              edit: 'POST /api/images/edit',
+              status: 'GET /api/images/status'
+            },
+            shopify: {
+              create_store: 'POST /api/shopify/create-store',
+              import_products: 'POST /api/shopify/import-products',
+              create_order: 'POST /api/shopify/create-order',
+              status: 'GET /api/shopify/status'
+            },
+            email: {
+              send: 'POST /api/emails/send',
+              add_contact: 'POST /api/emails/add-contact',
+              create_campaign: 'POST /api/emails/create-campaign',
+              status: 'GET /api/emails/status'
+            },
+            deployment: {
+              create_project: 'POST /api/deployments/create-project',
+              deploy: 'POST /api/deployments/deploy',
+              add_domain: 'POST /api/deployments/add-domain',
+              status: 'GET /api/deployments/status'
+            },
+            scraping: {
+              scrape_page: 'POST /api/scraping/scrape-page',
+              extract_data: 'POST /api/scraping/extract-data',
+              batch_scrape: 'POST /api/scraping/batch-scrape',
+              status: 'GET /api/scraping/status'
+            },
+            enrichment: {
+              enrich_company: 'POST /api/enrichment/enrich-company',
+              enrich_person: 'POST /api/enrichment/enrich-person',
+              verify_email: 'POST /api/enrichment/verify-email',
+              status: 'GET /api/enrichment/status'
+            }
+          },
+          features: {
+            scheduling: {
+              schedule_task: 'POST /api/scheduling/schedule',
+              list_schedules: 'GET /api/scheduling/list',
+              execute: 'POST /api/scheduling/:scheduleId/execute',
+              status: 'GET /api/scheduling/status'
+            },
+            analytics: {
+              track_event: 'POST /api/analytics/track-event',
+              track_conversion: 'POST /api/analytics/track-conversion',
+              get_metrics: 'GET /api/analytics/metrics',
+              status: 'GET /api/analytics/status'
+            },
+            cost_optimization: {
+              log_transaction: 'POST /api/costs/log-transaction',
+              get_breakdown: 'GET /api/costs/breakdown',
+              recommendations: 'GET /api/costs/recommendations',
+              status: 'GET /api/costs/status'
+            },
+            memory: {
+              add_memory: 'POST /api/memory/add-memory',
+              search: 'GET /api/memory/search',
+              generate_playbook: 'POST /api/memory/generate-playbook',
+              status: 'GET /api/memory/status'
+            }
           }
         }
       });
+    });
+
+    // Phase 4 Integration Endpoints
+    // Payment Endpoints
+    this.app.post('/api/payments/create-intent', async (req, res) => {
+      try {
+        if (!this.paymentIntegration) return res.status(503).json({ error: 'Payment integration not initialized' });
+        const { amount, currency } = req.body;
+        const result = await this.paymentIntegration.createPaymentIntent(amount, currency);
+        res.json(result);
+      } catch (error) {
+        logger.error(`Payment error: ${error.message}`);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.get('/api/payments/status', (req, res) => {
+      if (!this.paymentIntegration) return res.status(503).json({ error: 'Payment integration not initialized' });
+      res.json(this.paymentIntegration.getStatus());
+    });
+
+    // Social Endpoints
+    this.app.post('/api/social/schedule-post', async (req, res) => {
+      try {
+        if (!this.socialIntegration) return res.status(503).json({ error: 'Social integration not initialized' });
+        const { content, platforms, scheduleTime } = req.body;
+        const result = await this.socialIntegration.schedulePost(content, platforms, scheduleTime);
+        res.json(result);
+      } catch (error) {
+        logger.error(`Social error: ${error.message}`);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.get('/api/social/status', (req, res) => {
+      if (!this.socialIntegration) return res.status(503).json({ error: 'Social integration not initialized' });
+      res.json(this.socialIntegration.getStatus());
+    });
+
+    // Image Endpoints
+    this.app.post('/api/images/generate', async (req, res) => {
+      try {
+        if (!this.imageIntegration) return res.status(503).json({ error: 'Image integration not initialized' });
+        const { prompt, width, height } = req.body;
+        const result = await this.imageIntegration.generateImage(prompt, { width, height });
+        res.json(result);
+      } catch (error) {
+        logger.error(`Image error: ${error.message}`);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.get('/api/images/status', (req, res) => {
+      if (!this.imageIntegration) return res.status(503).json({ error: 'Image integration not initialized' });
+      res.json(this.imageIntegration.getStatus());
+    });
+
+    // Shopify Endpoints
+    this.app.post('/api/shopify/create-store', async (req, res) => {
+      try {
+        if (!this.shopifyIntegration) return res.status(503).json({ error: 'Shopify integration not initialized' });
+        const { storeName, theme } = req.body;
+        const result = await this.shopifyIntegration.createStore(storeName, theme);
+        res.json(result);
+      } catch (error) {
+        logger.error(`Shopify error: ${error.message}`);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.get('/api/shopify/status', (req, res) => {
+      if (!this.shopifyIntegration) return res.status(503).json({ error: 'Shopify integration not initialized' });
+      res.json(this.shopifyIntegration.getStatus());
+    });
+
+    // Email Integration Endpoints
+    this.app.post('/api/emails/send', async (req, res) => {
+      try {
+        if (!this.emailIntegration) return res.status(503).json({ error: 'Email integration not initialized' });
+        const { to, subject, html } = req.body;
+        const result = await this.emailIntegration.sendEmail(to, subject, html);
+        res.json(result);
+      } catch (error) {
+        logger.error(`Email error: ${error.message}`);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.get('/api/emails/status', (req, res) => {
+      if (!this.emailIntegration) return res.status(503).json({ error: 'Email integration not initialized' });
+      res.json(this.emailIntegration.getStatus());
+    });
+
+    // Deployment Endpoints
+    this.app.post('/api/deployments/create-project', async (req, res) => {
+      try {
+        if (!this.deploymentIntegration) return res.status(503).json({ error: 'Deployment integration not initialized' });
+        const { projectName, framework } = req.body;
+        const result = await this.deploymentIntegration.createProject(projectName, null, framework);
+        res.json(result);
+      } catch (error) {
+        logger.error(`Deployment error: ${error.message}`);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.get('/api/deployments/status', (req, res) => {
+      if (!this.deploymentIntegration) return res.status(503).json({ error: 'Deployment integration not initialized' });
+      res.json(this.deploymentIntegration.getStatus());
+    });
+
+    // Scraping Endpoints
+    this.app.post('/api/scraping/scrape-page', async (req, res) => {
+      try {
+        if (!this.scrapingIntegration) return res.status(503).json({ error: 'Scraping integration not initialized' });
+        const { url } = req.body;
+        const result = await this.scrapingIntegration.scrapePage(url);
+        res.json(result);
+      } catch (error) {
+        logger.error(`Scraping error: ${error.message}`);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.get('/api/scraping/status', (req, res) => {
+      if (!this.scrapingIntegration) return res.status(503).json({ error: 'Scraping integration not initialized' });
+      res.json(this.scrapingIntegration.getStatus());
+    });
+
+    // Enrichment Endpoints
+    this.app.post('/api/enrichment/enrich-company', async (req, res) => {
+      try {
+        if (!this.enrichmentIntegration) return res.status(503).json({ error: 'Enrichment integration not initialized' });
+        const { domain } = req.body;
+        const result = await this.enrichmentIntegration.enrichCompany(domain);
+        res.json(result);
+      } catch (error) {
+        logger.error(`Enrichment error: ${error.message}`);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.get('/api/enrichment/status', (req, res) => {
+      if (!this.enrichmentIntegration) return res.status(503).json({ error: 'Enrichment integration not initialized' });
+      res.json(this.enrichmentIntegration.getStatus());
+    });
+
+    // Phase 5 Feature Endpoints
+    // Scheduling Endpoints
+    this.app.post('/api/scheduling/schedule', async (req, res) => {
+      try {
+        if (!this.schedulingEngine) return res.status(503).json({ error: 'Scheduling engine not initialized' });
+        const { name, cronExpression, payload } = req.body;
+        const result = await this.schedulingEngine.scheduleRecurring(name, cronExpression, payload);
+        res.json(result);
+      } catch (error) {
+        logger.error(`Scheduling error: ${error.message}`);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.get('/api/scheduling/list', async (req, res) => {
+      try {
+        if (!this.schedulingEngine) return res.status(503).json({ error: 'Scheduling engine not initialized' });
+        const result = await this.schedulingEngine.listSchedules();
+        res.json(result);
+      } catch (error) {
+        logger.error(`Scheduling error: ${error.message}`);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.get('/api/scheduling/status', (req, res) => {
+      if (!this.schedulingEngine) return res.status(503).json({ error: 'Scheduling engine not initialized' });
+      res.json(this.schedulingEngine.getStatus());
+    });
+
+    // Analytics Endpoints
+    this.app.post('/api/analytics/track-event', async (req, res) => {
+      try {
+        if (!this.analyticsEngine) return res.status(503).json({ error: 'Analytics engine not initialized' });
+        const { userId, eventName, eventData } = req.body;
+        const result = await this.analyticsEngine.trackEvent(userId, eventName, eventData);
+        res.json(result);
+      } catch (error) {
+        logger.error(`Analytics error: ${error.message}`);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.post('/api/analytics/track-conversion', async (req, res) => {
+      try {
+        if (!this.analyticsEngine) return res.status(503).json({ error: 'Analytics engine not initialized' });
+        const { userId, conversionType, value } = req.body;
+        const result = await this.analyticsEngine.trackConversion(userId, conversionType, value);
+        res.json(result);
+      } catch (error) {
+        logger.error(`Analytics error: ${error.message}`);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.get('/api/analytics/metrics', async (req, res) => {
+      try {
+        if (!this.analyticsEngine) return res.status(503).json({ error: 'Analytics engine not initialized' });
+        const { startDate, endDate } = req.query;
+        const result = await this.analyticsEngine.getConversionMetrics(
+          new Date(startDate || Date.now() - 7*24*60*60*1000),
+          new Date(endDate || Date.now())
+        );
+        res.json(result);
+      } catch (error) {
+        logger.error(`Analytics error: ${error.message}`);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.get('/api/analytics/status', (req, res) => {
+      if (!this.analyticsEngine) return res.status(503).json({ error: 'Analytics engine not initialized' });
+      res.json(this.analyticsEngine.getStatus());
+    });
+
+    // Cost Optimizer Endpoints
+    this.app.post('/api/costs/log-transaction', async (req, res) => {
+      try {
+        if (!this.costOptimizer) return res.status(503).json({ error: 'Cost optimizer not initialized' });
+        const { service, amount, metadata } = req.body;
+        const result = await this.costOptimizer.logTransaction(service, amount, metadata);
+        res.json(result);
+      } catch (error) {
+        logger.error(`Cost error: ${error.message}`);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.get('/api/costs/breakdown', async (req, res) => {
+      try {
+        if (!this.costOptimizer) return res.status(503).json({ error: 'Cost optimizer not initialized' });
+        const result = await this.costOptimizer.getSpendingBreakdown();
+        res.json(result);
+      } catch (error) {
+        logger.error(`Cost error: ${error.message}`);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.get('/api/costs/recommendations', async (req, res) => {
+      try {
+        if (!this.costOptimizer) return res.status(503).json({ error: 'Cost optimizer not initialized' });
+        const result = await this.costOptimizer.generateRecommendations();
+        res.json(result);
+      } catch (error) {
+        logger.error(`Cost error: ${error.message}`);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.get('/api/costs/status', (req, res) => {
+      if (!this.costOptimizer) return res.status(503).json({ error: 'Cost optimizer not initialized' });
+      res.json(this.costOptimizer.getStatus());
+    });
+
+    // Memory System Endpoints
+    this.app.post('/api/memory/add-memory', async (req, res) => {
+      try {
+        if (!this.memorySystem) return res.status(503).json({ error: 'Memory system not initialized' });
+        const { content, category, metadata } = req.body;
+        const result = await this.memorySystem.addMemory(content, category, metadata);
+        res.json(result);
+      } catch (error) {
+        logger.error(`Memory error: ${error.message}`);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.get('/api/memory/search', async (req, res) => {
+      try {
+        if (!this.memorySystem) return res.status(503).json({ error: 'Memory system not initialized' });
+        const { query } = req.query;
+        const result = await this.memorySystem.getMemory(query);
+        res.json(result);
+      } catch (error) {
+        logger.error(`Memory error: ${error.message}`);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.post('/api/memory/generate-playbook', async (req, res) => {
+      try {
+        if (!this.memorySystem) return res.status(503).json({ error: 'Memory system not initialized' });
+        const { topic, minSuccessRate } = req.body;
+        const result = await this.memorySystem.generatePlaybook(topic, minSuccessRate);
+        res.json(result);
+      } catch (error) {
+        logger.error(`Memory error: ${error.message}`);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.get('/api/memory/status', (req, res) => {
+      if (!this.memorySystem) return res.status(503).json({ error: 'Memory system not initialized' });
+      res.json(this.memorySystem.getStatus());
     });
 
     // 404 handler
