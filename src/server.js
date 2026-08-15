@@ -44,6 +44,7 @@ import { registerPlatformCapabilities } from './core/platform-capabilities.js';
 import { Planner } from './core/planner.js';
 import { JobQueue } from './factories/job-queue.js';
 import { ApprovalGate } from './core/approval-gate.js';
+import { mountMcpEndpoint } from './mcp/http-transport.js';
 import { N8NIntegration } from './integrations/n8n-integration.js';
 import { PaymentIntegration } from './integrations/payment-integration.js';
 import { SocialIntegration } from './integrations/social-integration.js';
@@ -662,7 +663,15 @@ class HustleBotServer {
   setupMiddleware() {
     this.app.use(helmet());
     this.app.use(cors());
-    this.app.use(express.json());
+
+    // The MCP transport reads the raw request stream itself, so the JSON
+    // parser must not consume it first - doing so hangs every MCP call.
+    const jsonParser = express.json();
+    this.app.use((req, res, next) => {
+      if (req.path.startsWith('/mcp/')) return next();
+      return jsonParser(req, res, next);
+    });
+
     this.app.use(express.urlencoded({ extended: true }));
 
     // Request logging
@@ -900,6 +909,11 @@ class HustleBotServer {
 
       res.json(this.contentFactory.getMetrics());
     });
+
+    // ---- Remote MCP endpoint -----------------------------------------------
+    // Exposes the same tools as `npm run mcp`, but reachable over the public
+    // URL so Claude/ChatGPT connectors can use them. No token, no mount.
+    this.mcpEndpoint = mountMcpEndpoint(this.app, this);
 
     // ---- Human approval layer ----------------------------------------------
 

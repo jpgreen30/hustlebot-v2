@@ -9,16 +9,24 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
-  Tool,
+  // NB: `Tool` is a TypeScript type, not a runtime export. Importing it here
+  // threw at module load, so this file could never be imported at all.
 } from '@modelcontextprotocol/sdk/types.js';
 
 class HustleBotMCPServer {
   constructor(hustlebot) {
     this.hustlebot = hustlebot;
-    this.server = new Server({
-      name: 'hustlebot-mcp',
-      version: '1.0.0',
-    });
+    // The second argument is required: the SDK reads options.capabilities
+    // during connect(), so omitting it threw before any client could attach.
+    this.server = new Server(
+      {
+        name: 'hustlebot-mcp',
+        version: '1.0.0',
+      },
+      {
+        capabilities: { tools: {} },
+      }
+    );
     this.setupHandlers();
   }
 
