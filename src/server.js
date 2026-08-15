@@ -503,6 +503,36 @@ class HustleBotServer {
         logger.warn('⚠️  Memory System initialization failed, continuing:', error.message);
       }
 
+      // Capability registry after the services it binds, but before Telegram,
+      // which it does not depend on.
+      try {
+        logger.info('🔧 Initializing Capability Registry...');
+        this.capabilityRegistry = new CapabilityRegistry({
+          onInvocation: (record) => {
+            // Seam the audit log will also hang off. For now capability spend
+            // is attributed to the cost optimizer, tagged with the job and
+            // project so it can be joined back later.
+            if (record.success && record.cost > 0 && this.costOptimizer) {
+              this.costOptimizer
+                .logTransaction(`capability:${record.capabilityId}`, record.cost, {
+                  provider: record.provider,
+                  jobId: record.jobId,
+                  projectId: record.projectId,
+                  actor: record.actor,
+                  latencyMs: record.latencyMs
+                })
+                .catch((error) =>
+                  logger.error(`Failed to log capability spend: ${error.message}`)
+                );
+            }
+          }
+        });
+        registerPlatformCapabilities(this.capabilityRegistry, this);
+        logger.info('✅ Capability Registry ready');
+      } catch (error) {
+        logger.warn('⚠️  Capability Registry initialization failed, continuing:', error.message);
+      }
+
       // Try to initialize Telegram bot (graceful failure)
       if (process.env.TELEGRAM_BOT_TOKEN) {
         try {
@@ -534,44 +564,23 @@ class HustleBotServer {
             logger.warn('⚠️  Could not register commands:', error.message);
           }
 
-          // Launch the bot (start polling)
-          await this.bot.launch();
+          // Launch the bot (start polling).
+          //
+          // Deliberately not awaited: Telegraf's launch() promise does not
+          // settle until the bot STOPS, so awaiting it parks the rest of
+          // initialize() until shutdown. That is why startup hit the 30s
+          // timeout on every boot and anything registered after this point
+          // never ran during normal operation.
+          this.bot
+            .launch()
+            .then(() => logger.info('📱 Telegram bot polling stopped'))
+            .catch((error) => logger.warn('⚠️  Telegram polling error:', error.message));
           logger.info('✅ Telegram bot launched and polling');
         } catch (error) {
           logger.warn('⚠️  Telegram bot initialization failed:', error.message);
         }
       } else {
         logger.warn('⚠️  TELEGRAM_BOT_TOKEN not set, skipping bot initialization');
-      }
-
-      // Capability registry last, so it can see every service that came up
-      // and mark the rest as known-but-unavailable.
-      try {
-        logger.info('🔧 Initializing Capability Registry...');
-        this.capabilityRegistry = new CapabilityRegistry({
-          onInvocation: (record) => {
-            // Seam the audit log will also hang off. For now capability spend
-            // is attributed to the cost optimizer, tagged with the job and
-            // project so it can be joined back later.
-            if (record.success && record.cost > 0 && this.costOptimizer) {
-              this.costOptimizer
-                .logTransaction(`capability:${record.capabilityId}`, record.cost, {
-                  provider: record.provider,
-                  jobId: record.jobId,
-                  projectId: record.projectId,
-                  actor: record.actor,
-                  latencyMs: record.latencyMs
-                })
-                .catch((error) =>
-                  logger.error(`Failed to log capability spend: ${error.message}`)
-                );
-            }
-          }
-        });
-        registerPlatformCapabilities(this.capabilityRegistry, this);
-        logger.info('✅ Capability Registry ready');
-      } catch (error) {
-        logger.warn('⚠️  Capability Registry initialization failed, continuing:', error.message);
       }
 
       logger.info('🎉 HustleBot v2 initialized successfully!');
