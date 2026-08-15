@@ -2374,21 +2374,52 @@ For more info, visit https://hustlebot.io
 }
 
 // Initialize server
-const server = new HustleBotServer();
-server.createApp();
+let server;
+let app;
 
-// Local start
-if (!process.env.VERCEL) {
-  server.start();
+try {
+  console.log('[STARTUP] Creating HustleBotServer instance...');
+  server = new HustleBotServer();
+  console.log('[STARTUP] Instance created, calling createApp()...');
+  server.createApp();
+  console.log('[STARTUP] App created, setting reference...');
+  app = server.app;
+  console.log('[STARTUP] App reference set');
+
+  // Local start
+  if (!process.env.VERCEL) {
+    console.log('[STARTUP] Starting server (local mode)...');
+    server.start();
+  } else {
+    console.log('[STARTUP] Vercel serverless mode detected');
+  }
+
+  // Async initialization (background)
+  setTimeout(() => {
+    if (process.env.VERCEL && server && !server._initStarted) {
+      console.log('[STARTUP] Starting background initialization...');
+      server._initStarted = true;
+      server.initialize().catch(err => {
+        console.error('[STARTUP] Background init error:', err.message);
+      });
+    }
+  }, 100);
+
+  console.log('[STARTUP] Ready to export app');
+} catch (error) {
+  console.error('[STARTUP FATAL]', error.message);
+  console.error('[STARTUP STACK]', error.stack);
+
+  // Create minimal fallback app
+  app = express();
+  app.get('/health', (req, res) => {
+    res.status(500).json({
+      error: 'Server startup failed',
+      message: error.message
+    });
+  });
 }
 
-// Async initialization (background)
-setTimeout(() => {
-  if (process.env.VERCEL && server && !server._initStarted) {
-    server._initStarted = true;
-    server.initialize().catch(() => {});
-  }
-}, 100);
-
 // Export for Vercel
-export default server.app;
+console.log('[STARTUP] Exporting app...');
+export default app;
