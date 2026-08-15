@@ -2301,45 +2301,23 @@ const server = new HustleBotServer();
 // Check if running in Vercel (serverless environment)
 const isVercel = !!process.env.VERCEL;
 
-// Track initialization state
-let initPromise = null;
-let initialized = false;
-
-async function ensureInitialized() {
-  if (initialized) return;
-  if (initPromise) return initPromise;
-
-  initPromise = server.initialize()
-    .then(() => {
-      initialized = true;
-      logger.info('✅ Server initialization complete');
-    })
-    .catch(err => {
-      logger.error('❌ Server initialization failed:', err);
-      throw err;
-    });
-
-  return initPromise;
-}
-
 if (isVercel) {
-  // For Vercel serverless, wrap the app with initialization middleware
+  // For Vercel serverless environment
   logger.info('🌐 Running in Vercel serverless environment');
 
-  // Add middleware to ensure initialization before handling requests
-  server.app.use(async (req, res, next) => {
-    try {
-      await ensureInitialized();
-      next();
-    } catch (err) {
-      logger.error('Initialization failed in request handler:', err);
-      res.status(503).json({ error: 'Server initialization failed', details: err.message });
-    }
-  });
+  // Initialize synchronously where possible, async for external services
+  try {
+    // This will initialize all services with graceful failure
+    server.initialize().catch(err => {
+      logger.error('Async initialization error (continuing):', err.message);
+    });
+  } catch (err) {
+    logger.error('Sync initialization error:', err.message);
+  }
 } else {
   // For local/traditional deployment, start the server normally
   server.start();
 }
 
-// Export the app (works for both Vercel and regular servers)
+// Export the app (Vercel will use this as the handler)
 export default server.app;
