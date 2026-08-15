@@ -1262,6 +1262,81 @@ class HustleBotServer {
       }
     });
 
+    // Telegram webhook setup
+    this.app.post('/api/telegram/setup-webhook', async (req, res) => {
+      try {
+        if (!this.bot) {
+          return res.status(503).json({ error: 'Bot not initialized' });
+        }
+
+        // Get the deployment URL
+        const deployUrl = process.env.VERCEL_URL || req.headers.host;
+        const webhookUrl = `https://${deployUrl}/api/telegram/webhook`;
+
+        logger.info(`Setting Telegram webhook to: ${webhookUrl}`);
+
+        // Register webhook with Telegram
+        await this.bot.telegram.setWebhook(webhookUrl);
+
+        logger.info('✅ Telegram webhook set successfully');
+        res.json({
+          success: true,
+          webhookUrl,
+          message: 'Telegram webhook configured successfully'
+        });
+      } catch (error) {
+        logger.error('Failed to set webhook:', error.message);
+        res.status(500).json({
+          success: false,
+          error: error.message
+        });
+      }
+    });
+
+    // Check webhook status
+    this.app.get('/api/telegram/webhook-info', async (req, res) => {
+      try {
+        if (!this.bot) {
+          return res.status(503).json({ error: 'Bot not initialized' });
+        }
+
+        const info = await this.bot.telegram.getWebhookInfo();
+        res.json({
+          success: true,
+          webhook: info
+        });
+      } catch (error) {
+        logger.error('Failed to get webhook info:', error.message);
+        res.status(500).json({
+          success: false,
+          error: error.message
+        });
+      }
+    });
+
+    // Delete webhook (for cleanup)
+    this.app.post('/api/telegram/delete-webhook', async (req, res) => {
+      try {
+        if (!this.bot) {
+          return res.status(503).json({ error: 'Bot not initialized' });
+        }
+
+        await this.bot.telegram.deleteWebhook();
+        logger.info('✅ Telegram webhook deleted');
+
+        res.json({
+          success: true,
+          message: 'Telegram webhook deleted'
+        });
+      } catch (error) {
+        logger.error('Failed to delete webhook:', error.message);
+        res.status(500).json({
+          success: false,
+          error: error.message
+        });
+      }
+    });
+
     // Default route
     this.app.get('/', (req, res) => {
       res.json({
