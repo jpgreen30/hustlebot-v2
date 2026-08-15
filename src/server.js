@@ -45,6 +45,7 @@ import { WorkflowRefinementManager } from './core/workflow-refinement-manager.js
 import { VoiceConversationAgent } from './agents/voice-conversation-agent.js';
 import { ConversationManager } from './core/conversation-manager.js';
 import { TelegramCommandCenter } from './telegram/command-center.js';
+import { RedisMailbox } from './core/mailbox-redis.js';
 
 class HustleBotServer {
   constructor() {
@@ -148,7 +149,14 @@ class HustleBotServer {
       // Initialize Mailbox and Workflow Registry (core systems)
       try {
         logger.info('📬 Initializing Mailbox system...');
-        this.mailbox = new Mailbox({ db: this.db });
+        // Use Redis mailbox if available, otherwise use database mailbox
+        if (process.env.REDIS_URL) {
+          logger.info('📬 Using Redis-based bidirectional mailbox');
+          this.mailbox = new RedisMailbox(process.env.REDIS_URL);
+        } else {
+          logger.info('📬 Using database mailbox (single-direction)');
+          this.mailbox = new Mailbox({ db: this.db });
+        }
         await this.mailbox.initialize();
         logger.info('✅ Mailbox ready');
       } catch (error) {
