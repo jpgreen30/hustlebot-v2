@@ -11,6 +11,7 @@
  */
 
 import logger from '../utils/logger.js';
+import { ContentIntegrations } from './content-integrations.js';
 
 class ContentFactory {
   constructor(config = {}) {
@@ -20,6 +21,7 @@ class ContentFactory {
     this.imageGenerator = config.imageGenerator || null;
     this.analytics = config.analytics || null;
     this.distribution = config.distribution || null;
+    this.integrations = new ContentIntegrations({ providers: config.providers });
 
     this.pipeline = {
       trendIntelligence: null,
@@ -175,23 +177,8 @@ class ContentFactory {
    */
   async gatherTrendIntelligence(topic, options = {}) {
     try {
-      const intelligence = {
-        topic,
-        timestamp: new Date(),
-        sources: {
-          googleTrends: null,
-          searchConsole: null,
-          ga4: null,
-          competitors: null,
-          discussions: null
-        },
-        insights: []
-      };
-
-      // Placeholder: In production, integrate with real APIs
       logger.info(`📊 Gathering trends for: ${topic}`);
-
-      return intelligence;
+      return await this.integrations.researchTrends(topic, options);
     } catch (error) {
       logger.error(`Trend intelligence failed: ${error.message}`);
       return { topic, error: error.message };
@@ -258,32 +245,7 @@ class ContentFactory {
   async generateOutline(topic, contentType, research, options = {}) {
     try {
       logger.info(`📋 Generating outline for: ${topic}`);
-
-      const outline = {
-        topic,
-        contentType,
-        sections: [
-          {
-            heading: 'Introduction',
-            keyPoints: ['Hook', 'Problem statement', 'Value proposition'],
-            wordCount: 150
-          },
-          {
-            heading: 'Main Content',
-            keyPoints: ['Section 1', 'Section 2', 'Section 3'],
-            wordCount: 1500
-          },
-          {
-            heading: 'Conclusion',
-            keyPoints: ['Summary', 'Call to action'],
-            wordCount: 150
-          }
-        ],
-        estimatedWordCount: 1800,
-        seoKeywords: ['keyword1', 'keyword2', 'keyword3']
-      };
-
-      return outline;
+      return await this.integrations.generateOutlineWithLLM(topic, contentType, research);
     } catch (error) {
       logger.error(`Outline generation failed: ${error.message}`);
       return { sections: [], error: error.message };
@@ -296,22 +258,8 @@ class ContentFactory {
   async generateContentBody(outline, contentType, options = {}) {
     try {
       logger.info(`✍️ Generating content body...`);
-
-      // In production: Use LLM to generate based on outline
-      const content = {
-        outline: outline.topic,
-        contentType,
-        title: `Complete Guide to ${outline.topic}`,
-        body: `# ${outline.topic}\n\nContent body would be generated here using LLM based on outline.`,
-        wordCount: 1800,
-        readingTime: 8,
-        sections: outline.sections.map(s => ({
-          heading: s.heading,
-          content: `Content for ${s.heading} section...`
-        }))
-      };
-
-      return content;
+      const topic = outline.topic || 'Topic';
+      return await this.integrations.generateContentBodyWithLLM(outline, contentType, topic);
     } catch (error) {
       logger.error(`Content generation failed: ${error.message}`);
       return { wordCount: 0, error: error.message };
@@ -324,21 +272,7 @@ class ContentFactory {
   async performQA(content, research, options = {}) {
     try {
       logger.info(`✅ Performing quality assurance...`);
-
-      const qa = {
-        qualityScore: 85,
-        factAccuracy: 0.95,
-        readability: 0.9,
-        seoOptimization: 0.88,
-        issues: [],
-        recommendations: [
-          'Add more specific examples',
-          'Verify statistic from source 3',
-          'Improve section transitions'
-        ]
-      };
-
-      return qa;
+      return await this.integrations.performQAWithLLM(content, research);
     } catch (error) {
       logger.error(`QA failed: ${error.message}`);
       return { qualityScore: 0, error: error.message };
@@ -351,20 +285,7 @@ class ContentFactory {
   async optimizeForSEO(content, topic, options = {}) {
     try {
       logger.info(`🔍 Optimizing for SEO...`);
-
-      const seo = {
-        primaryKeyword: topic,
-        secondaryKeywords: ['keyword1', 'keyword2'],
-        metaTitle: `${topic} - Complete Guide`,
-        metaDescription: `Learn everything about ${topic}. Expert guide with research, tips, and best practices.`,
-        slug: topic.toLowerCase().replace(/\s+/g, '-'),
-        headingStructure: 'h1, h2, h2, h3, h3',
-        wordCountTarget: 1800,
-        internalLinkCount: 3,
-        readabilityScore: 85
-      };
-
-      return seo;
+      return await this.integrations.optimizeForSEOWithLLM(content, topic);
     } catch (error) {
       logger.error(`SEO optimization failed: ${error.message}`);
       return { error: error.message };
@@ -377,18 +298,8 @@ class ContentFactory {
   async generateImage(topic, contentType, options = {}) {
     try {
       logger.info(`🖼️ Generating featured image...`);
-
-      // In production: Use Replicate or other image generation
-      const image = {
-        topic,
-        contentType,
-        prompt: `Professional featured image for article about ${topic}`,
-        url: 'https://placeholder-image.example.com/image.jpg',
-        alt: `Featured image for ${topic}`,
-        provider: 'replicate'
-      };
-
-      return image;
+      const prompt = `Professional featured image for ${contentType} about ${topic}`;
+      return await this.integrations.generateImage(prompt, options);
     } catch (error) {
       logger.error(`Image generation failed: ${error.message}`);
       return { error: error.message };
@@ -452,19 +363,7 @@ class ContentFactory {
   async distributeContent(published, options = {}) {
     try {
       logger.info(`📢 Distributing content...`);
-
-      // In production: Use Postiz or other distribution
-      const distribution = {
-        contentId: published.id,
-        channels: [
-          { platform: 'twitter', status: 'queued' },
-          { platform: 'linkedin', status: 'queued' },
-          { platform: 'email', status: 'queued' }
-        ],
-        distributedAt: new Date()
-      };
-
-      return distribution;
+      return await this.integrations.distributeToSocial(published, options);
     } catch (error) {
       logger.error(`Distribution failed: ${error.message}`);
       return { error: error.message };

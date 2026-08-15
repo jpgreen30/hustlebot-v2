@@ -87,6 +87,7 @@ class HustleBotServer {
         this.contentFactory = new ContentFactory({
           db: this.db,
           llm: this.llm,
+          providers: this.providers,
           imageGenerator: this.providers
         });
         await this.contentFactory.initialize();
