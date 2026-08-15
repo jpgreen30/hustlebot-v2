@@ -13,14 +13,29 @@ All systems working perfectly locally:
 - ✅ /api/diagnostics shows all services initialized
 - ✅ All Phase 6-8 components operational
 - ✅ 16/16 tests pass locally
+- ✅ [IMPORT] diagnostics show all module imports succeeding
+- ✅ [STARTUP] diagnostics show HustleBotServer creating successfully
+- ✅ All Express middleware and routes initializing without errors
 
 ## Vercel Deployment Status ❌
 
 Every deployment returns: `FUNCTION_INVOCATION_FAILED`
 
+Build logs show successful completion:
+- ✅ "Build Completed in /vercel/output [9s]"
+- ✅ "Deployment completed"
+- ✅ Dependencies installed successfully
+- ✅ No build errors reported
+
+However, runtime invocation fails:
+- ❌ Every request returns FUNCTION_INVOCATION_FAILED
+- ❌ [IMPORT] and [STARTUP] console.log statements don't appear (not even reaching module load)
+- ❌ Error occurs before request handler is invoked
+- ❌ Same error across multiple export patterns tested
+
 This error occurs consistently across multiple approaches:
-- Express app export
-- Serverless handler function export
+- Express app export (`export default app`)
+- Serverless handler function export (`export default (req, res) => ...`)
 - Minimal fallback handlers
 - Ultra-simple test endpoints
 
@@ -95,32 +110,34 @@ Environment variables set in Vercel dashboard:
 
 ## Next Steps for User
 
-### Immediate Actions (Required to diagnose)
+### ⚠️ CRITICAL: Access Vercel Runtime Logs
 
-1. **Check Vercel Build Logs**
-   - Go to https://vercel.com/dashboard/jpgreen30/hustlebot-v2
-   - Click on latest deployment
-   - Check "Deployment" → "Build Logs" for errors
-   - Look for "Error:" or "Failed" messages
+The build succeeds but runtime fails. Console.log statements from module load don't appear, meaning **the error happens before code executes**. This requires runtime logs, not just build logs.
 
-2. **Use Vercel CLI for Detailed Logs**
+1. **Via Vercel CLI (Best Option)**
    ```bash
    npm install -g vercel        # If not installed
-   vercel login                 # Authenticate
-   vercel logs hustlebot-v2 --tail
-   # Watch real-time logs as deployment runs
+   vercel login                 # Authenticate with your account
+   vercel logs hustlebot-v2     # Get logs (might need --tail for streaming)
+   # Look for errors during module load/invocation
    ```
 
-3. **Trigger Manual Rebuild**
-   - Go to Deployments tab
-   - Click three dots on latest deployment
-   - Select "Redeploy"
-   - Observe build process and logs
+2. **Via Vercel Dashboard**
+   - Go to https://vercel.com/dashboard/jpgreen30/hustlebot-v2
+   - Click latest deployment
+   - Look for "Runtime Logs" or "Function Logs" tab (not just "Build Logs")
+   - You should see errors or [IMPORT]/[STARTUP] console messages
+   - If nothing appears, the error is at the module system level
 
-4. **Check for Build-Time Issues**
-   - Build logs may show module not found errors
-   - May indicate missing dependencies
-   - May show version incompatibilities
+3. **If Logs Still Show Nothing**
+   - The issue may be at the Vercel serverless function handler level
+   - Try creating a simple `api/hello.js` file with just:
+     ```javascript
+     export default function handler(req, res) {
+       res.json({ ok: true });
+     }
+     ```
+   - Deploy and test `/api/hello` to see if Vercel's basic functions work
 
 ### Diagnostic Questions to Answer
 
