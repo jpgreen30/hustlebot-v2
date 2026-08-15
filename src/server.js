@@ -159,8 +159,7 @@ class HustleBotServer {
           ai_responses: !!this.llm,
           voice_messages: !!this.voice,
           image_generation: !!this.llm,
-          streaming: !!this.providers,
-          file_storage: !!this.providers
+          streaming: !!this.providers
         },
         timestamp: new Date().toISOString()
       });
@@ -214,65 +213,6 @@ class HustleBotServer {
       }
     });
 
-    // File storage endpoint - store file
-    this.app.post('/api/storage/store', async (req, res) => {
-      try {
-        if (!this.providers) {
-          return res.status(503).json({ error: 'Provider abstraction not initialized' });
-        }
-
-        const { key, data, metadata } = req.body;
-
-        if (!key || !data) {
-          return res.status(400).json({ error: 'key and data required' });
-        }
-
-        const result = await this.providers.storeFile(key, data, metadata);
-        res.json(result);
-      } catch (error) {
-        logger.error(`Storage error: ${error.message}`);
-        res.status(500).json({ error: error.message });
-      }
-    });
-
-    // File storage endpoint - retrieve file
-    this.app.get('/api/storage/retrieve/:key', async (req, res) => {
-      try {
-        if (!this.providers) {
-          return res.status(503).json({ error: 'Provider abstraction not initialized' });
-        }
-
-        const { key } = req.params;
-        const result = await this.providers.retrieveFile(key);
-
-        res.json({
-          key: result.key,
-          size: result.data.length,
-          storage: result.storage,
-          contentType: result.contentType
-        });
-      } catch (error) {
-        logger.error(`Retrieval error: ${error.message}`);
-        res.status(404).json({ error: 'File not found' });
-      }
-    });
-
-    // File storage endpoint - delete file
-    this.app.delete('/api/storage/delete/:key', async (req, res) => {
-      try {
-        if (!this.providers) {
-          return res.status(503).json({ error: 'Provider abstraction not initialized' });
-        }
-
-        const { key } = req.params;
-        const result = await this.providers.deleteFile(key);
-
-        res.json(result);
-      } catch (error) {
-        logger.error(`Delete error: ${error.message}`);
-        res.status(500).json({ error: error.message });
-      }
-    });
 
     // Debug endpoint
     this.app.get('/api/debug', (req, res) => {
@@ -311,14 +251,7 @@ class HustleBotServer {
         endpoints: {
           health: '/health',
           status: '/api/status',
-          streaming: {
-            stream: 'POST /api/stream'
-          },
-          storage: {
-            store: 'POST /api/storage/store',
-            retrieve: 'GET /api/storage/retrieve/:key',
-            delete: 'DELETE /api/storage/delete/:key'
-          }
+          streaming: 'POST /api/stream'
         }
       });
     });
