@@ -12,6 +12,7 @@
 
 import logger from '../utils/logger.js';
 import { ContentIntegrations } from './content-integrations.js';
+import { JobQueue } from './job-queue.js';
 
 class ContentFactory {
   constructor(config = {}) {
@@ -21,7 +22,21 @@ class ContentFactory {
     this.imageGenerator = config.imageGenerator || null;
     this.analytics = config.analytics || null;
     this.distribution = config.distribution || null;
-    this.integrations = new ContentIntegrations({ providers: config.providers });
+
+    // Domain configuration for content context
+    this.domainContext = config.domainContext || process.env.CONTENT_DOMAIN || 'parenting and family wellness';
+
+    this.integrations = new ContentIntegrations({
+      providers: config.providers,
+      domainContext: this.domainContext,
+      callTimeout: config.callTimeout || 30000
+    });
+
+    // Job queue for async content generation
+    this.jobQueue = new JobQueue({
+      maxConcurrent: config.maxConcurrentJobs || 3,
+      jobTimeout: config.jobTimeout || 300000 // 5 minutes total
+    });
 
     this.pipeline = {
       trendIntelligence: null,
@@ -42,7 +57,8 @@ class ContentFactory {
       contentPublished: 0,
       avgQualityScore: 0,
       totalReach: 0,
-      totalEngagement: 0
+      totalEngagement: 0,
+      avgGenerationTime: 0
     };
   }
 
@@ -60,7 +76,12 @@ class ContentFactory {
         logger.warn('⚠️  LLM not configured, content generation disabled');
       }
 
+      // Clean up old jobs periodically
+      setInterval(() => this.jobQueue.cleanup(), 3600000); // Every hour
+
       logger.info('✅ Content Factory initialized');
+      logger.info(`📊 Domain context: ${this.domainContext}`);
+      logger.info(`⚙️  Max concurrent jobs: ${this.jobQueue.maxConcurrent}`);
       return true;
     } catch (error) {
       logger.error('Content Factory initialization failed:', error.message);
@@ -69,9 +90,50 @@ class ContentFactory {
   }
 
   /**
-   * Execute full content pipeline
+   * Start async content generation job
+   * Returns job ID for tracking progress
+   */
+  startContentGeneration(topic, contentType = 'guide', options = {}) {
+    try {
+      // Validate input
+      if (!topic || topic.length > 500) {
+        throw new Error('Topic must be 1-500 characters');
+      }
+      if (!['guide', 'review', 'comparison', 'weeklyJourney', 'news'].includes(contentType)) {
+        throw new Error(`Invalid content type: ${contentType}`);
+      }
+
+      const jobId = this.jobQueue.createJob('content-generation', {
+        topic,
+        contentType,
+        options,
+        execute: async () => {
+          const result = await this.generateContent(topic, contentType, options);
+          this.jobQueue.setResult(jobId, result);
+        }
+      });
+
+      logger.info(`📋 Content generation job started: ${jobId}`);
+      return jobId;
+    } catch (error) {
+      logger.error(`Failed to start content generation: ${error.message}`);
+      throw error;
+    }
+  }
+
+  /**
+   * Get job status
+   */
+  getJobStatus(jobId) {
+    return this.jobQueue.getJob(jobId);
+  }
+
+  /**
+   * Execute full content pipeline (synchronous, for direct calls)
    */
   async generateContent(topic, contentType = 'guide', options = {}) {
+    const startTime = Date.now();
+
     try {
       logger.info(`📝 Starting content pipeline for: ${topic} (${contentType})`);
 
@@ -165,9 +227,19 @@ class ContentFactory {
       this.metrics.contentPublished++;
       this.metrics.contentGenerated++;
 
+      // Track generation time
+      const duration = Date.now() - startTime;
+      this.metrics.avgGenerationTime = Math.round(
+        (this.metrics.avgGenerationTime * (this.metrics.contentGenerated - 1) + duration) /
+          this.metrics.contentGenerated
+      );
+
+      logger.info(`✅ Content pipeline completed in ${(duration / 1000).toFixed(2)}s`);
       return pipeline;
     } catch (error) {
       logger.error(`Content pipeline failed: ${error.message}`);
+      const duration = Date.now() - startTime;
+      logger.error(`Pipeline ran for ${(duration / 1000).toFixed(2)}s before failure`);
       throw error;
     }
   }

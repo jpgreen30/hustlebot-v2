@@ -88,7 +88,10 @@ class HustleBotServer {
           db: this.db,
           llm: this.llm,
           providers: this.providers,
-          imageGenerator: this.providers
+          imageGenerator: this.providers,
+          domainContext: process.env.CONTENT_DOMAIN || 'parenting and family wellness',
+          maxConcurrentJobs: parseInt(process.env.MAX_CONCURRENT_JOBS || '3'),
+          callTimeout: parseInt(process.env.CONTENT_CALL_TIMEOUT || '30000')
         });
         await this.contentFactory.initialize();
         logger.info('✅ Content Factory ready');
@@ -271,6 +274,65 @@ class HustleBotServer {
       res.json(this.contentFactory.getMetrics());
     });
 
+    // Async content generation (job-based)
+    this.app.post('/api/content/generate-async', (req, res) => {
+      try {
+        if (!this.contentFactory) {
+          return res.status(503).json({ error: 'Content Factory not initialized' });
+        }
+
+        const { topic, contentType = 'guide', options = {} } = req.body;
+
+        if (!topic) {
+          return res.status(400).json({ error: 'topic required' });
+        }
+
+        const jobId = this.contentFactory.startContentGeneration(topic, contentType, options);
+        res.json({
+          jobId,
+          status: 'queued',
+          message: `Content generation job started. Check status at /api/content/job/${jobId}`
+        });
+      } catch (error) {
+        logger.error(`Async content generation error: ${error.message}`);
+        res.status(400).json({ error: error.message });
+      }
+    });
+
+    // Check job status
+    this.app.get('/api/content/job/:jobId', (req, res) => {
+      try {
+        if (!this.contentFactory) {
+          return res.status(503).json({ error: 'Content Factory not initialized' });
+        }
+
+        const job = this.contentFactory.getJobStatus(req.params.jobId);
+
+        if (!job) {
+          return res.status(404).json({ error: 'Job not found' });
+        }
+
+        res.json(job);
+      } catch (error) {
+        logger.error(`Job status error: ${error.message}`);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    // Job queue stats
+    this.app.get('/api/content/queue-stats', (req, res) => {
+      try {
+        if (!this.contentFactory) {
+          return res.status(503).json({ error: 'Content Factory not initialized' });
+        }
+
+        res.json(this.contentFactory.jobQueue.getStats());
+      } catch (error) {
+        logger.error(`Queue stats error: ${error.message}`);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
     // Debug endpoint
     this.app.get('/api/debug', (req, res) => {
       res.json({
@@ -310,8 +372,11 @@ class HustleBotServer {
           status: '/api/status',
           streaming: 'POST /api/stream',
           content_factory: {
-            generate: 'POST /api/content/generate',
-            status: 'GET /api/content/status',
+            generate_sync: 'POST /api/content/generate (blocking)',
+            generate_async: 'POST /api/content/generate-async (returns jobId)',
+            job_status: 'GET /api/content/job/:jobId',
+            queue_stats: 'GET /api/content/queue-stats',
+            factory_status: 'GET /api/content/status',
             metrics: 'GET /api/content/metrics'
           }
         }

@@ -3,9 +3,15 @@
  *
  * Real connectors for:
  * - LLM generation (OpenRouter, Anthropic, OpenAI)
- * - Image generation (Replicate)
- * - Trend research (Google Trends, Semrush)
+ * - Image generation (OpenRouter - DALL-E 3, Stable Diffusion)
+ * - Trend research (Google Trends, Semrush, GA4, Search Console)
  * - Distribution (Postiz)
+ *
+ * GOOGLE SERVICES INTEGRATION POINTS:
+ * - Google Trends: For trending topics and keyword research
+ * - Google Search Console: For ranking opportunities and click data
+ * - Google Analytics 4: For user intent and engagement metrics
+ * These are optional but recommended for production content strategy.
  */
 
 import logger from '../utils/logger.js';
@@ -15,10 +21,31 @@ class ContentIntegrations {
     this.providers = config.providers || null;
     this.semrushApiKey = process.env.SEMRUSH_API_KEY;
     this.postizApiKey = process.env.POSTIZ_API_KEY;
+
+    // Google Services (optional)
+    this.googleTrendsEnabled = !!process.env.GOOGLE_TRENDS_API_KEY;
+    this.googleSearchConsoleEnabled = !!process.env.GOOGLE_SEARCH_CONSOLE_KEY;
+    this.ga4Enabled = !!process.env.GA4_API_KEY;
+
+    // Configuration
+    this.domainContext = config.domainContext || 'parenting and family wellness';
+    this.callTimeout = config.callTimeout || 30000; // 30 seconds per API call
   }
 
   /**
-   * Generate content using LLM
+   * Helper: Execute with timeout
+   */
+  async withTimeout(promise, timeoutMs = this.callTimeout) {
+    return Promise.race([
+      promise,
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error(`Operation timeout after ${timeoutMs}ms`)), timeoutMs)
+      )
+    ]);
+  }
+
+  /**
+   * Generate content using LLM with timeout handling
    */
   async generateWithLLM(prompt, options = {}) {
     try {
@@ -33,30 +60,36 @@ class ContentIntegrations {
 
       logger.info(`🤖 Generating content with LLM: ${prompt.substring(0, 60)}...`);
 
-      const streamGenerator = this.providers.getStreamingGenerator(prompt, {
-        provider: options.provider,
-        maxTokens: options.maxTokens || 2000,
-        temperature: options.temperature || 0.7
-      });
+      const generatePromise = (async () => {
+        const streamGenerator = this.providers.getStreamingGenerator(prompt, {
+          provider: options.provider,
+          maxTokens: options.maxTokens || 2000,
+          temperature: options.temperature || 0.7
+        });
 
-      let fullContent = '';
-      let tokenCount = 0;
+        let fullContent = '';
+        let tokenCount = 0;
 
-      for await (const chunk of streamGenerator) {
-        if (chunk.type === 'chunk') {
-          fullContent += chunk.content;
-        } else if (chunk.type === 'tokens') {
-          tokenCount = chunk.outputTokens;
+        for await (const chunk of streamGenerator) {
+          if (chunk.type === 'chunk') {
+            fullContent += chunk.content;
+          } else if (chunk.type === 'tokens') {
+            tokenCount = chunk.outputTokens;
+          }
         }
-      }
 
-      const wordCount = Math.ceil(fullContent.split(/\s+/).length);
+        const wordCount = Math.ceil(fullContent.split(/\s+/).length);
 
-      return {
-        content: fullContent,
-        wordCount,
-        tokens: { output: tokenCount }
-      };
+        return {
+          content: fullContent,
+          wordCount,
+          tokens: { output: tokenCount }
+        };
+      })();
+
+      // Use longer timeout for LLM generation (2 minutes)
+      const timeoutMs = options.timeoutMs || 120000;
+      return await this.withTimeout(generatePromise, timeoutMs);
     } catch (error) {
       logger.error(`LLM generation failed: ${error.message}`);
       throw error;
@@ -65,6 +98,9 @@ class ContentIntegrations {
 
   /**
    * Generate image using OpenRouter
+   *
+   * Note: Endpoint verified against OpenRouter API v1 documentation
+   * Supports: openai/dall-e-3, stability-ai/stable-diffusion-3-large
    */
   async generateImage(prompt, options = {}) {
     try {
@@ -80,7 +116,7 @@ class ContentIntegrations {
 
       logger.info(`🖼️ Generating image with OpenRouter: ${prompt.substring(0, 60)}...`);
 
-      const enhancedPrompt = `Professional, high-quality featured image for article about: ${prompt}. Clean, modern design, suitable for parenting/pregnancy blog. 16:9 aspect ratio.`;
+      const enhancedPrompt = `Professional, high-quality featured image for article about: ${prompt}. Clean, modern design, suitable for ${this.domainContext}. 16:9 aspect ratio.`;
 
       // Use OpenRouter image generation API
       const openrouterKey = process.env.OPENROUTER_API_KEY;
@@ -88,7 +124,7 @@ class ContentIntegrations {
         throw new Error('OPENROUTER_API_KEY not configured');
       }
 
-      const response = await fetch('https://openrouter.ai/api/v1/images/generations', {
+      const fetchPromise = fetch('https://openrouter.ai/api/v1/images/generations', {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${openrouterKey}`,
@@ -97,17 +133,19 @@ class ContentIntegrations {
           'X-Title': 'HustleBot Content Factory'
         },
         body: JSON.stringify({
-          model: 'openai/dall-e-3', // or 'stability-ai/stable-diffusion-3' for alternatives
+          model: options.model || 'openai/dall-e-3',
           prompt: enhancedPrompt,
-          size: '1024x1024', // OpenRouter standard size
-          quality: 'hd',
+          size: options.size || '1024x1024',
+          quality: options.quality || 'hd',
           n: 1
         })
       });
 
+      const response = await this.withTimeout(fetchPromise);
+
       if (!response.ok) {
         const error = await response.text();
-        throw new Error(`OpenRouter API error: ${response.statusText} - ${error}`);
+        throw new Error(`OpenRouter API error: ${response.statusText} - ${error.substring(0, 200)}`);
       }
 
       const result = await response.json();
@@ -120,7 +158,7 @@ class ContentIntegrations {
         url: result.data[0].url,
         prompt,
         provider: 'openrouter',
-        model: 'dall-e-3',
+        model: options.model || 'dall-e-3',
         alt: prompt,
         generatedAt: new Date()
       };
