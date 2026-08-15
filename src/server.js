@@ -2341,7 +2341,10 @@ if (isVercel) {
   });
 } else {
   // For local/traditional deployment, start the server normally
-  server.start();
+  server.start().catch(err => {
+    logger.error('Failed to start server:', err);
+    process.exit(1);
+  });
 }
 
 // Export the app (works for both Vercel and regular servers)
