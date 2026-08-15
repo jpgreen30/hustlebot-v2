@@ -2289,10 +2289,29 @@ For more info, visit https://hustlebot.io
       process.exit(1);
     }
   }
+
+  getApp() {
+    return this.app;
+  }
 }
 
-// Start server
+// Initialize server
 const server = new HustleBotServer();
-server.start();
 
-export default server;
+// Check if running in Vercel (serverless environment)
+const isVercel = !!process.env.VERCEL;
+
+if (isVercel) {
+  // For Vercel serverless, initialize but don't listen
+  logger.info('🌐 Running in Vercel serverless environment');
+  server.initialize().catch(err => {
+    logger.error('Failed to initialize for Vercel:', err);
+    process.exit(1);
+  });
+} else {
+  // For local/traditional deployment, start the server normally
+  server.start();
+}
+
+// Export the app (works for both Vercel and regular servers)
+export default server.app;
