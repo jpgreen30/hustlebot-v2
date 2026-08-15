@@ -2342,41 +2342,7 @@ class HustleBotServer {
       }
     });
 
-    // Handle text messages (must come after command handlers)
-    this.bot.on('message', async (ctx) => {
-      try {
-        const userMessage = ctx.message.text || '';
-        logger.info(`Message from user ${ctx.from.id}: ${userMessage}`);
-
-        // Show "typing" indicator
-        await ctx.sendChatAction('typing');
-
-        // Try to get AI response
-        if (this.llm) {
-          try {
-            const response = await this.llm.complete(userMessage, {
-              taskType: 'general',
-              maxTokens: 1000,
-              temperature: 0.7
-            });
-
-            logger.info(`AI response for user ${ctx.from.id}: ${response.tokens.input} in, ${response.tokens.output} out, $${response.cost.toFixed(4)} cost`);
-            await ctx.reply(response.content);
-          } catch (error) {
-            logger.error('LLM error:', error.message);
-            await ctx.reply('⚠️ AI service temporarily unavailable. Please try again later.');
-          }
-        } else {
-          logger.warn('LLM not initialized, using fallback response');
-          await ctx.reply('Got your message! The AI service is loading. Please try again in a moment.');
-        }
-      } catch (error) {
-        logger.error('Error handling message:', error);
-        await ctx.reply('❌ Something went wrong. Please try again.');
-      }
-    });
-
-    // Handle voice messages
+    // Handle voice messages (MUST come BEFORE generic message handler)
     this.bot.on('voice', async (ctx) => {
       try {
         logger.info(`🎤 Voice message from user ${ctx.from.id}`);
@@ -2436,6 +2402,45 @@ class HustleBotServer {
       } catch (error) {
         logger.error('Voice message error:', error.message, error.stack);
         await ctx.reply(`❌ Voice error: ${error.message}`);
+      }
+    });
+
+    // Handle text messages (MUST come AFTER voice handler)
+    this.bot.on('message', async (ctx) => {
+      try {
+        // Skip if not a text message (voice messages handled above)
+        if (!ctx.message.text) {
+          return;
+        }
+
+        const userMessage = ctx.message.text;
+        logger.info(`Message from user ${ctx.from.id}: ${userMessage}`);
+
+        // Show "typing" indicator
+        await ctx.sendChatAction('typing');
+
+        // Try to get AI response
+        if (this.llm) {
+          try {
+            const response = await this.llm.complete(userMessage, {
+              taskType: 'general',
+              maxTokens: 1000,
+              temperature: 0.7
+            });
+
+            logger.info(`AI response for user ${ctx.from.id}: ${response.tokens.input} in, ${response.tokens.output} out, $${response.cost.toFixed(4)} cost`);
+            await ctx.reply(response.content);
+          } catch (error) {
+            logger.error('LLM error:', error.message);
+            await ctx.reply('⚠️ AI service temporarily unavailable. Please try again later.');
+          }
+        } else {
+          logger.warn('LLM not initialized, using fallback response');
+          await ctx.reply('Got your message! The AI service is loading. Please try again in a moment.');
+        }
+      } catch (error) {
+        logger.error('Error handling message:', error);
+        await ctx.reply('❌ Something went wrong. Please try again.');
       }
     });
 
