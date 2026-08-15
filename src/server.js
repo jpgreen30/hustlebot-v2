@@ -39,6 +39,8 @@ import { CommerceFactory } from './factories/commerce-factory.js';
 import { BrandFactory } from './factories/brand-factory.js';
 import { Mailbox } from './core/mailbox.js';
 import { WorkflowRegistry } from './core/workflow-registry.js';
+import { CapabilityRegistry } from './core/capability-registry.js';
+import { registerPlatformCapabilities } from './core/platform-capabilities.js';
 import { N8NIntegration } from './integrations/n8n-integration.js';
 import { PaymentIntegration } from './integrations/payment-integration.js';
 import { SocialIntegration } from './integrations/social-integration.js';
@@ -92,6 +94,7 @@ class HustleBotServer {
     // Phase 5 Features
     this.schedulingEngine = null;
     this.analyticsEngine = null;
+    this.capabilityRegistry = null;
     this.costOptimizer = null;
     this.memorySystem = null;
     // Phase 6 Features
@@ -541,6 +544,36 @@ class HustleBotServer {
         logger.warn('⚠️  TELEGRAM_BOT_TOKEN not set, skipping bot initialization');
       }
 
+      // Capability registry last, so it can see every service that came up
+      // and mark the rest as known-but-unavailable.
+      try {
+        logger.info('🔧 Initializing Capability Registry...');
+        this.capabilityRegistry = new CapabilityRegistry({
+          onInvocation: (record) => {
+            // Seam the audit log will also hang off. For now capability spend
+            // is attributed to the cost optimizer, tagged with the job and
+            // project so it can be joined back later.
+            if (record.success && record.cost > 0 && this.costOptimizer) {
+              this.costOptimizer
+                .logTransaction(`capability:${record.capabilityId}`, record.cost, {
+                  provider: record.provider,
+                  jobId: record.jobId,
+                  projectId: record.projectId,
+                  actor: record.actor,
+                  latencyMs: record.latencyMs
+                })
+                .catch((error) =>
+                  logger.error(`Failed to log capability spend: ${error.message}`)
+                );
+            }
+          }
+        });
+        registerPlatformCapabilities(this.capabilityRegistry, this);
+        logger.info('✅ Capability Registry ready');
+      } catch (error) {
+        logger.warn('⚠️  Capability Registry initialization failed, continuing:', error.message);
+      }
+
       logger.info('🎉 HustleBot v2 initialized successfully!');
       logger.info('[INIT] ✅ initialize() method returning true - initialization complete');
       return true;
@@ -791,6 +824,68 @@ class HustleBotServer {
       }
 
       res.json(this.contentFactory.getMetrics());
+    });
+
+    // ---- Capability registry ----------------------------------------------
+
+    // What the platform can do, and which of it is usable right now.
+    this.app.get('/api/capabilities', (req, res) => {
+      try {
+        if (!this.capabilityRegistry) {
+          return res.status(503).json({ error: 'Capability Registry not initialized' });
+        }
+        const { vertical, provider, availableOnly } = req.query;
+        res.json({
+          stats: this.capabilityRegistry.getStats(),
+          capabilities: this.capabilityRegistry.list({
+            vertical,
+            provider,
+            availableOnly: availableOnly === 'true'
+          })
+        });
+      } catch (error) {
+        logger.error(`Capability list error: ${error.message}`);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    // Full metadata for one capability: cost, latency, permissions,
+    // failure modes, fallback, and observed reliability per provider.
+    this.app.get('/api/capabilities/:capabilityId', (req, res) => {
+      try {
+        if (!this.capabilityRegistry) {
+          return res.status(503).json({ error: 'Capability Registry not initialized' });
+        }
+        const described = this.capabilityRegistry.describe(req.params.capabilityId);
+        if (!described) {
+          return res.status(404).json({ error: `Unknown capability: ${req.params.capabilityId}` });
+        }
+        res.json(described);
+      } catch (error) {
+        logger.error(`Capability describe error: ${error.message}`);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    // Run a capability by id, letting the registry pick and fall back.
+    this.app.post('/api/capabilities/:capabilityId/invoke', async (req, res) => {
+      try {
+        if (!this.capabilityRegistry) {
+          return res.status(503).json({ error: 'Capability Registry not initialized' });
+        }
+
+        const { input = {}, context = {} } = req.body || {};
+        const result = await this.capabilityRegistry.invoke(
+          req.params.capabilityId,
+          input,
+          { ...context, actor: context.actor || 'api' }
+        );
+        res.json(result);
+      } catch (error) {
+        logger.error(`Capability invoke error: ${error.message}`);
+        const unknown = /Unknown capability/.test(error.message);
+        res.status(unknown ? 404 : 400).json({ error: error.message });
+      }
     });
 
     // Async content generation (job-based)

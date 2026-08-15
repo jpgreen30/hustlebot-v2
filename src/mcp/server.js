@@ -376,6 +376,56 @@ class HustleBotMCPServer {
           properties: {},
         },
       },
+
+      // Capability Registry - the generic way to reach every registered
+      // capability without adding a bespoke tool for each one.
+      {
+        name: 'list_capabilities',
+        description:
+          'List platform capabilities (web.scrape, lead.enrich, email.send, voice.call, ' +
+          'site.deploy, ...) with their providers, availability, required permissions, and ' +
+          'whether they need human approval',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            vertical: { type: 'string', description: 'Only capabilities supporting this vertical' },
+            availableOnly: { type: 'boolean', description: 'Exclude capabilities with no usable provider' },
+          },
+        },
+      },
+      {
+        name: 'describe_capability',
+        description:
+          'Full metadata for one capability: version, provider, permissions, input/output schema, ' +
+          'expected cost and latency, observed reliability, failure modes, and fallback provider',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            capabilityId: { type: 'string', description: 'e.g. "web.scrape"' },
+          },
+          required: ['capabilityId'],
+        },
+      },
+      {
+        name: 'invoke_capability',
+        description:
+          'Run a capability by id. The registry picks the best available provider and falls ' +
+          'back to the next one on failure.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            capabilityId: { type: 'string', description: 'e.g. "web.scrape"' },
+            input: { type: 'object', description: 'Input matching the capability input schema' },
+            vertical: { type: 'string' },
+            permissions: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Permissions granted to this call',
+            },
+          },
+          required: ['capabilityId'],
+        },
+      },
     ];
   }
 
@@ -410,12 +460,52 @@ class HustleBotMCPServer {
           return await this.searchKnowledge(args);
         case 'get_system_status':
           return await this.getSystemStatus(args);
+        case 'list_capabilities':
+          return await this.listCapabilities(args);
+        case 'describe_capability':
+          return await this.describeCapability(args);
+        case 'invoke_capability':
+          return await this.invokeCapability(args);
         default:
           return { error: `Unknown tool: ${name}` };
       }
     } catch (error) {
       return { error: error.message };
     }
+  }
+
+  requireRegistry() {
+    if (!this.hustlebot.capabilityRegistry) {
+      throw new Error('Capability Registry not initialized');
+    }
+    return this.hustlebot.capabilityRegistry;
+  }
+
+  async listCapabilities(args = {}) {
+    const registry = this.requireRegistry();
+    return {
+      stats: registry.getStats(),
+      capabilities: registry.list({
+        vertical: args.vertical,
+        availableOnly: args.availableOnly === true,
+      }),
+    };
+  }
+
+  async describeCapability(args = {}) {
+    const registry = this.requireRegistry();
+    const described = registry.describe(args.capabilityId);
+    if (!described) return { error: `Unknown capability: ${args.capabilityId}` };
+    return described;
+  }
+
+  async invokeCapability(args = {}) {
+    const registry = this.requireRegistry();
+    return registry.invoke(args.capabilityId, args.input || {}, {
+      vertical: args.vertical,
+      permissions: args.permissions || [],
+      actor: 'mcp',
+    });
   }
 
   async generateContent(args) {
