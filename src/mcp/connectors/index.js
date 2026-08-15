@@ -10,6 +10,7 @@ import 'dotenv/config';
 import { DeepSeekConnector } from './deepseek-connector.js';
 import { KimiConnector } from './kimi-connector.js';
 import { ChatGPTConnector } from './chatgpt-connector.js';
+import { GrokConnector } from './grok-connector.js';
 
 class ConnectorsManager {
   constructor() {
@@ -62,6 +63,20 @@ class ConnectorsManager {
       console.error('[Connectors] ❌ ChatGPT connector failed:', error.message, '\n');
     }
 
+    // Initialize Grok
+    try {
+      console.log('[Connectors] Setting up Grok connector...');
+      const grok = new GrokConnector({
+        redisUrl: process.env.REDIS_URL,
+        openrouterKey: process.env.OPENROUTER_API_KEY,
+      });
+      await grok.initialize();
+      this.connectors.push(grok);
+      console.log('[Connectors] ✅ Grok connector ready\n');
+    } catch (error) {
+      console.error('[Connectors] ❌ Grok connector failed:', error.message, '\n');
+    }
+
     if (this.connectors.length === 0) {
       console.error('[Connectors] ❌ No connectors initialized');
       throw new Error('Failed to initialize any connectors');
@@ -87,6 +102,7 @@ class ConnectorsManager {
     console.log(`  • DeepSeek: Ready (chat/voice analysis)`);
     console.log(`  • Kimi: Ready (code reviews & architecture)`);
     console.log(`  • ChatGPT: Ready (reasoning & collaboration)`);
+    console.log(`  • Grok: Ready (unconventional thinking & wit)`);
     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
   }
 
