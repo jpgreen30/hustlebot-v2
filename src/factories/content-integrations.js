@@ -15,6 +15,7 @@
  */
 
 import logger from '../utils/logger.js';
+import { SerpAPIIntegration } from './serpapi-integration.js';
 
 class ContentIntegrations {
   constructor(config = {}) {
@@ -26,6 +27,11 @@ class ContentIntegrations {
     this.googleTrendsEnabled = !!process.env.GOOGLE_TRENDS_API_KEY;
     this.googleSearchConsoleEnabled = !!process.env.GOOGLE_SEARCH_CONSOLE_KEY;
     this.ga4Enabled = !!process.env.GA4_API_KEY;
+
+    // SerpAPI Integration for real Google data
+    this.serpapi = new SerpAPIIntegration({
+      callTimeout: config.callTimeout || 30000
+    });
 
     // Configuration
     this.domainContext = config.domainContext || 'parenting and family wellness';
@@ -188,7 +194,22 @@ class ContentIntegrations {
         sources: {}
       };
 
-      // Placeholder research data
+      // Try SerpAPI for real Google Trends data
+      if (this.serpapi.isEnabled()) {
+        logger.info('🔍 Fetching real Google Trends data from SerpAPI...');
+        const serpapiTrends = await this.serpapi.getTrends(topic, options);
+        trends.sources.serpapi = serpapiTrends;
+        trends.sources.keywords = serpapiTrends.keywords;
+        trends.sources.searchInsights = {
+          searchVolume: serpapiTrends.searchVolume,
+          trend: serpapiTrends.trend,
+          competitionLevel: 'medium'
+        };
+        trends.sources.relatedTopics = serpapiTrends.relatedQueries || [];
+        return trends;
+      }
+
+      // Fallback: Placeholder research data
       trends.sources.keywords = [
         topic,
         `${topic} guide`,
@@ -211,9 +232,9 @@ class ContentIntegrations {
         'wellness'
       ];
 
-      // In production: Integrate Semrush MCP for real data
+      // Optional: Integrate Semrush MCP for additional data
       if (this.semrushApiKey) {
-        logger.info('🔍 Fetching real keyword data from Semrush...');
+        logger.info('🔍 Fetching supplementary keyword data from Semrush...');
         // Semrush integration would go here
       }
 
@@ -453,7 +474,8 @@ Make them engaging and platform-appropriate. Include hashtags where relevant.`;
     return {
       llmProvider: this.providers ? 'connected' : 'disconnected',
       imageGeneration: this.providers ? 'connected (via OpenRouter)' : 'disconnected',
-      trendResearch: 'available',
+      trendResearch: this.serpapi.isEnabled() ? 'live (SerpAPI)' : 'placeholder',
+      searchAnalysis: this.serpapi.isEnabled() ? 'live (SerpAPI)' : 'placeholder',
       distribution: this.postizApiKey ? 'configured' : 'unconfigured',
       timestamp: new Date()
     };
