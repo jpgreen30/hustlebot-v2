@@ -2374,28 +2374,38 @@ For more info, visit https://hustlebot.io
 }
 
 // Initialize server
-const server = new HustleBotServer();
+let server;
+let initialized = false;
 
-// Create the Express app immediately (synchronous)
-server.createApp();
+try {
+  server = new HustleBotServer();
+  server.createApp();
+  initialized = true;
 
-// Start background initialization async
-process.nextTick(() => {
-  const isVercel = !!process.env.VERCEL;
-  if (isVercel) {
-    server.initialize().catch(err => {
-      logger.error('Async initialization error (continuing):', err.message);
-    });
+  // Start background initialization async
+  process.nextTick(() => {
+    if (process.env.VERCEL && server) {
+      server.initialize().catch(() => {
+        // Silent failure for background init
+      });
+    }
+  });
+
+  // For local/non-Vercel, start the server
+  if (!process.env.VERCEL) {
+    server.start();
   }
-});
-
-// For local/non-Vercel, start the server
-if (!process.env.VERCEL) {
-  server.start();
+} catch (error) {
+  console.error('Failed to initialize:', error.message);
+  // Create minimal fallback
+  server = new HustleBotServer();
+  server.createApp();
 }
 
 // Export handler for Vercel
 export default (req, res) => {
-  // Pass the request to the Express app
-  return server.app(req, res);
+  if (server && server.app) {
+    return server.app(req, res);
+  }
+  res.status(500).json({ error: 'Server not initialized' });
 };
