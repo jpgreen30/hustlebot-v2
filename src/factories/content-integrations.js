@@ -16,6 +16,9 @@
 
 import logger from '../utils/logger.js';
 import { SerpAPIIntegration } from './serpapi-integration.js';
+import { CacheService } from '../utils/cache.js';
+import { GoogleSearchConsoleIntegration } from '../integrations/google-search-console.js';
+import { GoogleAnalyticsIntegration } from '../integrations/google-analytics.js';
 
 class ContentIntegrations {
   constructor(config = {}) {
@@ -31,6 +34,22 @@ class ContentIntegrations {
     // SerpAPI Integration for real Google data
     this.serpapi = new SerpAPIIntegration({
       callTimeout: config.callTimeout || 30000
+    });
+
+    // Google Search Console and GA4 Integrations
+    this.gsc = new GoogleSearchConsoleIntegration({
+      callTimeout: config.callTimeout || 30000
+    });
+
+    this.ga4 = new GoogleAnalyticsIntegration({
+      callTimeout: config.callTimeout || 30000
+    });
+
+    // Caching layer for API responses
+    // TTL: trends 24h, search 12h, news 6h, gsc 24h, ga4 1h
+    this.cache = new CacheService({
+      defaultTTL: 3600000, // 1 hour default
+      cleanupInterval: 600000 // cleanup every 10 minutes
     });
 
     // Configuration
@@ -182,11 +201,22 @@ class ContentIntegrations {
   }
 
   /**
-   * Research trends using keywords
+   * Research trends using keywords (with caching)
    */
   async researchTrends(topic, options = {}) {
     try {
       logger.info(`📊 Researching trends for: ${topic}`);
+
+      // Generate cache key (24 hour TTL for trends)
+      const cacheKey = CacheService.generateKey('trends', { topic });
+      const TRENDS_TTL = 86400000; // 24 hours
+
+      // Try cached result first
+      const cached = this.cache.get(cacheKey);
+      if (cached) {
+        logger.info('💾 Using cached trend data');
+        return cached;
+      }
 
       const trends = {
         topic,
@@ -206,6 +236,9 @@ class ContentIntegrations {
           competitionLevel: 'medium'
         };
         trends.sources.relatedTopics = serpapiTrends.relatedQueries || [];
+
+        // Cache the result
+        this.cache.set(cacheKey, trends, TRENDS_TTL);
         return trends;
       }
 
@@ -231,6 +264,9 @@ class ContentIntegrations {
         'health',
         'wellness'
       ];
+
+      // Cache placeholder too
+      this.cache.set(cacheKey, trends, TRENDS_TTL);
 
       // Optional: Integrate Semrush MCP for additional data
       if (this.semrushApiKey) {
@@ -468,6 +504,133 @@ Make them engaging and platform-appropriate. Include hashtags where relevant.`;
   }
 
   /**
+   * Get ranking opportunities from Google Search Console
+   */
+  async getRankingOpportunities(topic, options = {}) {
+    try {
+      logger.info(`🎯 Analyzing ranking opportunities for: ${topic}`);
+
+      // Generate cache key (24 hour TTL for GSC data)
+      const cacheKey = CacheService.generateKey('gsc-opportunities', { topic });
+      const GSC_TTL = 86400000; // 24 hours
+
+      // Try cached result first
+      const cached = this.cache.get(cacheKey);
+      if (cached) {
+        logger.info('💾 Using cached GSC data');
+        return cached;
+      }
+
+      const opportunities = await this.gsc.analyzeOpportunities(topic, options);
+
+      // Cache the result
+      this.cache.set(cacheKey, opportunities, GSC_TTL);
+      return opportunities;
+    } catch (error) {
+      logger.error(`Ranking opportunities analysis failed: ${error.message}`);
+      return { topic, opportunities: [], error: error.message };
+    }
+  }
+
+  /**
+   * Get content quality score from Google Analytics
+   */
+  async analyzeContentQuality(topic, options = {}) {
+    try {
+      logger.info(`✨ Analyzing content quality for: ${topic}`);
+
+      // Generate cache key (1 hour TTL for GA4 data - changes frequently)
+      const cacheKey = CacheService.generateKey('ga4-quality', { topic });
+      const GA4_TTL = 3600000; // 1 hour
+
+      // Try cached result first
+      const cached = this.cache.get(cacheKey);
+      if (cached) {
+        logger.info('💾 Using cached GA4 quality data');
+        return cached;
+      }
+
+      const quality = await this.ga4.analyzeContentQuality(topic, options);
+
+      // Cache the result
+      this.cache.set(cacheKey, quality, GA4_TTL);
+      return quality;
+    } catch (error) {
+      logger.error(`Content quality analysis failed: ${error.message}`);
+      return { topic, qualityScore: 0, error: error.message };
+    }
+  }
+
+  /**
+   * Get complete SEO analysis (Trends + GSC + GA4)
+   */
+  async getSEOAnalysis(topic, options = {}) {
+    try {
+      logger.info(`📊 Running complete SEO analysis for: ${topic}`);
+
+      const [trends, opportunities, quality] = await Promise.all([
+        this.researchTrends(topic, options),
+        this.getRankingOpportunities(topic, options),
+        this.analyzeContentQuality(topic, options)
+      ]);
+
+      return {
+        topic,
+        trends,
+        opportunities,
+        quality,
+        timestamp: new Date(),
+        recommendation: this.generateSEORecommendation(trends, opportunities, quality),
+        source: 'complete-seo-analysis'
+      };
+    } catch (error) {
+      logger.error(`Complete SEO analysis failed: ${error.message}`);
+      throw error;
+    }
+  }
+
+  /**
+   * Generate SEO recommendation based on analysis
+   */
+  generateSEORecommendation(trends, opportunities, quality) {
+    const recommendations = [];
+
+    if (trends.sources?.searchInsights?.trend === 'rising') {
+      recommendations.push('🚀 Topic is trending - prioritize content creation');
+    }
+
+    if (opportunities.opportunities && opportunities.opportunities.length > 0) {
+      recommendations.push(`📈 Found ${opportunities.opportunities.length} ranking opportunities with low CTR - optimize title/meta`);
+    }
+
+    if (quality.qualityScore && quality.qualityScore > 75) {
+      recommendations.push('✨ Content quality is strong - consider promoting this topic');
+    } else if (quality.qualityScore && quality.qualityScore < 50) {
+      recommendations.push('⚠️ Content engagement is low - consider refresh or restructure');
+    }
+
+    return recommendations.length > 0 ? recommendations : ['Continue monitoring this topic'];
+  }
+
+  /**
+   * Get cache statistics
+   */
+  getCacheStats() {
+    return this.cache.getStats();
+  }
+
+  /**
+   * Clear cache
+   */
+  clearCache(key = null) {
+    if (key) {
+      this.cache.clear(key);
+    } else {
+      this.cache.clearAll();
+    }
+  }
+
+  /**
    * Check if integrations are available
    */
   getStatus() {
@@ -476,6 +639,9 @@ Make them engaging and platform-appropriate. Include hashtags where relevant.`;
       imageGeneration: this.providers ? 'connected (via OpenRouter)' : 'disconnected',
       trendResearch: this.serpapi.isEnabled() ? 'live (SerpAPI)' : 'placeholder',
       searchAnalysis: this.serpapi.isEnabled() ? 'live (SerpAPI)' : 'placeholder',
+      rankingOpportunities: this.gsc.isEnabled() ? 'live (GSC)' : 'placeholder',
+      contentQuality: this.ga4.isEnabled() ? 'live (GA4)' : 'placeholder',
+      caching: 'enabled',
       distribution: this.postizApiKey ? 'configured' : 'unconfigured',
       timestamp: new Date()
     };
