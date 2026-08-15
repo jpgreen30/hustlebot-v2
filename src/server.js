@@ -2515,6 +2515,29 @@ class HustleBotServer {
         }
       });
     } catch (error) {
+      // If it's the initialization timeout, log warning and continue to listen
+      if (error.message && error.message.includes('Initialization timeout')) {
+        logger.warn(`⚠️  ${error.message}`);
+        logger.warn('⚠️  Continuing with partial initialization (some systems may not be ready)');
+
+        // Proceed to app.listen() anyway
+        logger.info(`[START] 📡 About to call app.listen on port ${this.port} (partial init)...`);
+        this.server = this.app.listen(this.port, '0.0.0.0', () => {
+          logger.info(`[LISTEN] 🚀 Server listening on port ${this.port}`);
+          logger.info(`[LISTEN] 📊 Health check: http://localhost:${this.port}/health`);
+          logger.info(`[LISTEN] 🌐 Status: http://localhost:${this.port}/api/status`);
+        });
+
+        this.server.on('error', (err) => {
+          logger.error(`[LISTEN] ❌ Server listen error: ${err.message}`);
+          process.exit(1);
+        });
+
+        logger.info(`[START] ✅ Server startup sequence complete (with initialization timeout)`);
+        return;
+      }
+
+      // For other errors, exit
       logger.error('Failed to start server:', error);
       process.exit(1);
     }
