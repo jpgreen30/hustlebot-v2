@@ -527,6 +527,7 @@ class HustleBotServer {
       }
 
       logger.info('🎉 HustleBot v2 initialized successfully!');
+      logger.info('[INIT] ✅ initialize() method returning true - initialization complete');
       return true;
     } catch (error) {
       logger.error('❌ Initialization failed:', error);
@@ -2439,22 +2440,29 @@ class HustleBotServer {
 
   async start() {
     try {
+      logger.info('[START] ⏳ Waiting for initialization...');
       await this.initialize();
+      logger.info('[START] ✅ Initialization complete');
 
-      logger.info(`📡 Calling app.listen on port ${this.port}...`);
+      logger.info(`[START] 📡 About to call app.listen on port ${this.port}...`);
+      logger.info(`[START] 📡 this.app = ${this.app ? 'EXISTS' : 'NULL'}`);
+      logger.info(`[START] 📡 this.port = ${this.port}`);
+
       this.server = this.app.listen(this.port, '0.0.0.0', () => {
-        logger.info(`🚀 Server listening on port ${this.port}`);
-        logger.info(`📊 Health check: http://localhost:${this.port}/health`);
-        logger.info(`🌐 Status: http://localhost:${this.port}/api/status`);
+        logger.info(`[LISTEN] 🚀 Server listening on port ${this.port}`);
+        logger.info(`[LISTEN] 📊 Health check: http://localhost:${this.port}/health`);
+        logger.info(`[LISTEN] 🌐 Status: http://localhost:${this.port}/api/status`);
       });
+
+      logger.info(`[START] 📡 app.listen() returned, setting up error handler...`);
 
       // Add error handler for listen
       this.server.on('error', (err) => {
-        logger.error(`❌ Server listen error: ${err.message}`);
+        logger.error(`[LISTEN] ❌ Server listen error: ${err.message}`);
         process.exit(1);
       });
 
-      logger.info(`📡 app.listen() called, waiting for callback...`);
+      logger.info(`[START] ✅ Server startup sequence complete`);
 
       // Graceful shutdown
       process.on('SIGINT', async () => {
