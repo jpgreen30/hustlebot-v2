@@ -2373,47 +2373,26 @@ For more info, visit https://hustlebot.io
   }
 }
 
-let app;
+// Initialize server
+const server = new HustleBotServer();
 
-try {
-  // Initialize server
-  const server = new HustleBotServer();
+// Create the Express app immediately (synchronous)
+server.createApp();
+
+// Start background initialization async
+process.nextTick(() => {
   const isVercel = !!process.env.VERCEL;
-
-  if (!isVercel) {
-    // Local development: start normally
-    server.start();
-  } else {
-    // Vercel serverless: create app immediately
-    server.createApp();
-    app = server.app;
-
-    // Start background initialization without blocking export
-    setImmediate(() => {
-      if (!server._initStarted) {
-        server._initStarted = true;
-        server.initialize().catch(err => {
-          // Silently log background errors
-        });
-      }
+  if (isVercel) {
+    server.initialize().catch(err => {
+      logger.error('Async initialization error (continuing):', err.message);
     });
   }
+});
 
-  if (!app) {
-    // Fallback: create minimal app
-    app = express();
-    app.get('/health', (req, res) => {
-      res.json({ status: 'minimal' });
-    });
-  }
-} catch (error) {
-  // Fallback app in case of any errors
-  console.error('Startup error:', error.message);
-  app = express();
-  app.get('/health', (req, res) => {
-    res.status(500).json({ error: 'Startup failed', message: error.message });
-  });
+// For local/non-Vercel, start the server
+if (!process.env.VERCEL) {
+  server.start();
 }
 
-// Export the app - must be defined
-export default app;
+// Export app for Vercel (this must be the very last line in the file)
+export default server.app;
