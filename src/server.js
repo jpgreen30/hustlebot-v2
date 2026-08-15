@@ -2361,9 +2361,16 @@ class HustleBotServer {
           logger.info('Downloading voice file...');
           const voiceFile = await ctx.telegram.getFile(ctx.message.voice.file_id);
           const audioUrl = `https://api.telegram.org/file/bot${process.env.TELEGRAM_BOT_TOKEN}/${voiceFile.file_path}`;
+          logger.info(`Audio URL: ${audioUrl}`);
+
+          // Use native fetch and convert response to buffer
           const audioResponse = await fetch(audioUrl);
-          const audioBuffer = await audioResponse.buffer();
-          logger.info(`Audio buffer size: ${audioBuffer.length} bytes`);
+          logger.info(`Fetch response received, status: ${audioResponse.status}`);
+
+          // Convert arrayBuffer to Node.js Buffer (compatible with both v2 and v3)
+          const arrayBuffer = await audioResponse.arrayBuffer();
+          const audioBuffer = Buffer.from(arrayBuffer);
+          logger.info(`Audio buffer created, size: ${audioBuffer.length} bytes`);
 
           // Convert voice to text
           logger.info('Converting speech to text...');

@@ -3,16 +3,45 @@
  *
  * Speech-to-Text (voice → text)
  * Text-to-Speech (text → voice)
+ *
+ * Targets @deepgram/sdk v3.x.
  */
 
 import { createClient } from '@deepgram/sdk';
 import logger from '../utils/logger.js';
-import fetch from 'node-fetch';
+
+/**
+ * Collect a Deepgram audio stream into a Buffer.
+ * speak.request().getStream() returns a web ReadableStream.
+ */
+async function streamToBuffer(stream) {
+  if (!stream) {
+    throw new Error('Deepgram returned no audio stream');
+  }
+
+  const chunks = [];
+
+  if (typeof stream.getReader === 'function') {
+    const reader = stream.getReader();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(Buffer.from(value));
+    }
+  } else {
+    for await (const chunk of stream) {
+      chunks.push(Buffer.from(chunk));
+    }
+  }
+
+  return Buffer.concat(chunks);
+}
 
 class DeepgramVoiceClient {
   constructor(apiKey) {
     this.apiKey = apiKey;
-    this.client = createClient({ apiKey });
+    // v3 takes the key as a string, not { apiKey }
+    this.client = createClient(apiKey);
   }
 
   /**
@@ -20,30 +49,33 @@ class DeepgramVoiceClient {
    */
   async speechToText(audioBuffer, mimeType = 'audio/ogg') {
     try {
-      logger.info('🎤 Converting speech to text...');
+      logger.info(`🎤 Converting speech to text (${audioBuffer.length} bytes, ${mimeType})...`);
 
-      const response = await this.client.listen.prerecorded(
-        {
-          buffer: audioBuffer,
-          mimetype: mimeType
-        },
+      const { result, error } = await this.client.listen.prerecorded.transcribeFile(
+        audioBuffer,
         {
           model: 'nova-2',
           language: 'en',
           smart_format: true,
-          punctuation: true
+          punctuate: true,
+          mimetype: mimeType
         }
       );
 
-      const transcript = response.result?.results?.channels?.[0]?.alternatives?.[0]?.transcript || '';
+      if (error) {
+        throw new Error(`Deepgram transcription failed: ${error.message || JSON.stringify(error)}`);
+      }
+
+      const alternative = result?.results?.channels?.[0]?.alternatives?.[0];
+      const transcript = alternative?.transcript || '';
       logger.info(`✅ Transcript: ${transcript}`);
 
       return {
         text: transcript,
-        confidence: response.result?.results?.channels?.[0]?.alternatives?.[0]?.confidence || 0
+        confidence: alternative?.confidence || 0
       };
     } catch (error) {
-      logger.error('Speech-to-text error:', error);
+      logger.error(`Speech-to-text error: ${error.message}`);
       throw error;
     }
   }
@@ -56,19 +88,18 @@ class DeepgramVoiceClient {
       logger.info(`🔊 Converting text to speech (${voice})...`);
 
       const response = await this.client.speak.request(
+        { text },
         {
-          text: text
-        },
-        {
-          model: 'aura',
+          // In v3 the voice is the model
+          model: voice,
           encoding: 'linear16',
           container: 'wav'
         }
       );
 
-      // Get audio stream
-      const audioBuffer = await response.getStream();
-      logger.info('✅ Speech generated');
+      const stream = await response.getStream();
+      const audioBuffer = await streamToBuffer(stream);
+      logger.info(`✅ Speech generated (${audioBuffer.length} bytes)`);
 
       return {
         audioBuffer,
@@ -76,7 +107,7 @@ class DeepgramVoiceClient {
         size: audioBuffer.length
       };
     } catch (error) {
-      logger.error('Text-to-speech error:', error);
+      logger.error(`Text-to-speech error: ${error.message}`);
       throw error;
     }
   }

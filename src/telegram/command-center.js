@@ -499,40 +499,33 @@ class TelegramCommandCenter {
     );
   }
 
+  /**
+   * Edit a message the bot previously sent.
+   *
+   * ctx.editMessageText targets ctx.msgId, which for a command is the user's
+   * own message - the bot cannot edit that. Target the sent message directly.
+   */
+  async editSentMessage(ctx, sentMsg, text, extra) {
+    try {
+      await ctx.telegram.editMessageText(
+        ctx.chat.id,
+        sentMsg.message_id,
+        undefined,
+        text,
+        extra
+      );
+    } catch (error) {
+      logger.error('Failed to edit message:', error.message);
+      await ctx.reply(text, extra);
+    }
+  }
+
   // AI Agent Commands
   async handleAgentsCommand(ctx) {
     try {
-      if (!this.server?.mailbox) {
-        await ctx.reply('❌ Mailbox system not available');
-        return;
-      }
-
       const args = ctx.message.text.split(' ').slice(1);
-      if (args.length === 0 || args[0] === 'ping') {
-        await ctx.reply('🔄 Checking agent status... (this may take a few seconds)');
 
-        const agents = ['deepseek', 'kimi', 'chatgpt', 'grok'];
-        const results = [];
-
-        for (const agent of agents) {
-          try {
-            const msgId = await this.server.mailbox.send(agent, { type: 'ping' }, {
-              from: 'telegram',
-              ttl: 10000,
-              requiresAck: true
-            });
-            results.push(`✅ ${agent}: Connected`);
-          } catch (error) {
-            results.push(`⚠️ ${agent}: Offline`);
-          }
-        }
-
-        await ctx.reply(
-          '🤖 *Agent Status*\n\n' +
-          results.join('\n') +
-          '\n\n_Last updated: ' + new Date().toLocaleTimeString() + '_'
-        );
-      } else {
+      if (args.length > 0 && args[0] !== 'ping') {
         await ctx.reply(
           '🤖 *AI Agents*\n\n' +
           'Usage:\n' +
@@ -540,8 +533,50 @@ class TelegramCommandCenter {
           '/deepseek [query] - Ask DeepSeek\n' +
           '/kimi [query] - Ask Kimi\n' +
           '/chatgpt [query] - Ask ChatGPT\n' +
-          '/grok [query] - Ask Grok'
+          '/grok [query] - Ask Grok',
+          { parse_mode: 'Markdown' }
         );
+        return;
+      }
+
+      const waitMsg = await ctx.reply('⏳ Checking agent status...');
+
+      try {
+        const redis = this.server?.mailbox?.redis;
+        if (!redis) {
+          await this.editSentMessage(ctx, waitMsg, '❌ Redis mailbox not available');
+          return;
+        }
+
+        const agents = ['deepseek', 'kimi', 'chatgpt', 'grok'];
+        const results = await Promise.all(agents.map(async (agent) => {
+          const msgId = `ping_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+          const message = {
+            id: msgId,
+            from: 'telegram',
+            to: agent,
+            subject: 'Ping',
+            content: 'ping',
+            timestamp: new Date().toISOString()
+          };
+
+          await redis.rpush(`mailbox:${agent}:queue`, JSON.stringify(message));
+          const response = await this.waitForAgentResponse(redis, msgId, agent, 3000);
+          return { agent, online: !!response };
+        }));
+
+        const status = results
+          .map(r => r.online ? `✅ ${r.agent}: Responding` : `❌ ${r.agent}: No response`)
+          .join('\n');
+
+        await this.editSentMessage(
+          ctx,
+          waitMsg,
+          `🤖 *Agent Status*\n\n${status}\n\n_Last updated: ${new Date().toLocaleTimeString()}_`,
+          { parse_mode: 'Markdown' }
+        );
+      } catch (error) {
+        await this.editSentMessage(ctx, waitMsg, `❌ Error: ${error.message}`);
       }
     } catch (error) {
       logger.error('Error in agents command:', error);
@@ -587,7 +622,7 @@ class TelegramCommandCenter {
         // Send message via mailbox Redis directly for better control
         const redis = this.server?.mailbox?.redis;
         if (!redis) {
-          await ctx.editMessageText('❌ Redis mailbox not available');
+          await this.editSentMessage(ctx, waitMsg, '❌ Redis mailbox not available');
           return;
         }
 
@@ -611,21 +646,27 @@ class TelegramCommandCenter {
         const response = await this.waitForAgentResponse(redis, msgId, agent, 15000);
 
         if (response) {
-          await ctx.editMessageText(
+          await this.editSentMessage(
+            ctx,
+            waitMsg,
             `${agentName}\n\n` +
             `*Your Query:*\n${query}\n\n` +
             `*Response:*\n${response}`,
             { parse_mode: 'Markdown' }
           );
         } else {
-          await ctx.editMessageText(
+          await this.editSentMessage(
+            ctx,
+            waitMsg,
             `${agentName}\n\n` +
             `Query sent but no response received within timeout.\n` +
             `Please try again or check if agent is online with /agents ping`
           );
         }
       } catch (error) {
-        await ctx.editMessageText(
+        await this.editSentMessage(
+          ctx,
+          waitMsg,
           `❌ ${agentName} Error\n\n` +
           `Failed to reach agent: ${error.message}\n\n` +
           `Try: /agents ping`
@@ -637,20 +678,24 @@ class TelegramCommandCenter {
     }
   }
 
-  async waitForAgentResponse(redis, inReplyToId, agent, timeout = 15000) {
+  async waitForAgentResponse(redis, msgId, agent, timeout = 15000) {
     const startTime = Date.now();
-    const pollInterval = 1000;
+    const pollInterval = 500;
 
     while (Date.now() - startTime < timeout) {
       try {
-        // Check mailbox:telegram:queue for responses
-        const messages = await redis.lrange('mailbox:telegram:queue', 0, 50);
+        // Check mailbox:telegram:queue for replies addressed to this query
+        const messages = await redis.lrange('mailbox:telegram:queue', 0, -1);
 
         for (const msgStr of messages) {
-          const msg = JSON.parse(msgStr);
-          // Look for a reply to our message
-          if (msg.inReplyTo === inReplyToId || msg.from === agent) {
-            // Found a response, remove it from queue
+          let msg;
+          try {
+            msg = JSON.parse(msgStr);
+          } catch {
+            continue; // skip malformed entries rather than abandoning the poll
+          }
+
+          if (msg.inReplyTo === msgId && msg.from === agent) {
             await redis.lrem('mailbox:telegram:queue', 1, msgStr);
             return msg.content;
           }
