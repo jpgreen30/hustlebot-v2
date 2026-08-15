@@ -44,6 +44,7 @@ import { VoiceWorkflowRefinerAgent } from './agents/voice-workflow-refiner-agent
 import { WorkflowRefinementManager } from './core/workflow-refinement-manager.js';
 import { VoiceConversationAgent } from './agents/voice-conversation-agent.js';
 import { ConversationManager } from './core/conversation-manager.js';
+import { TelegramCommandCenter } from './telegram/command-center.js';
 
 class HustleBotServer {
   constructor() {
@@ -2120,40 +2121,17 @@ class HustleBotServer {
 
     logger.info('📱 Setting up Telegram command handlers...');
 
-    // Handle /start command
+    // Initialize command center
+    const commandCenter = new TelegramCommandCenter(this.bot, this);
+    commandCenter.register();
+
+    // Handle /start command (show main menu)
     this.bot.command('start', async (ctx) => {
       try {
         logger.info(`/start command from user ${ctx.from.id}`);
-        await ctx.reply('👋 Welcome to HustleBot v2!\n\n📚 Send /help for available commands.');
+        await ctx.reply('👋 Welcome to HustleBot v2!\n\nLaunch the command center with /menu or use voice commands.');
       } catch (error) {
         logger.error('Error handling /start:', error);
-      }
-    });
-
-    // Handle /help command
-    this.bot.command('help', async (ctx) => {
-      try {
-        logger.info(`/help command from user ${ctx.from.id}`);
-        const helpMessage = `
-<b>🤖 HustleBot v2 Commands</b>
-
-<b>Core Commands:</b>
-/start - Welcome & quick start
-/help - This message
-/status - Check service status
-
-<b>Features Coming Soon:</b>
-• Landing page builder
-• Lead generation
-• Content creation
-• Video production
-• E-commerce automation
-
-For more info, visit https://hustlebot.io
-`;
-        await ctx.reply(helpMessage, { parse_mode: 'HTML' });
-      } catch (error) {
-        logger.error('Error handling /help:', error);
       }
     });
 
@@ -2161,7 +2139,7 @@ For more info, visit https://hustlebot.io
     this.bot.command('status', async (ctx) => {
       try {
         logger.info(`/status command from user ${ctx.from.id}`);
-        await ctx.reply('✅ HustleBot v2 is running and ready!\n\nMore features coming soon...');
+        await ctx.reply('✅ HustleBot v2 is running and ready!\n\nLaunch the command center with /menu');
       } catch (error) {
         logger.error('Error handling /status:', error);
       }
