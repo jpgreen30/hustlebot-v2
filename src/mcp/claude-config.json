@@ -1,0 +1,30 @@
+{
+  "mcpServers": {
+    "hustlebot": {
+      "command": "node",
+      "args": ["src/mcp/index.js"],
+      "env": {
+        "NODE_ENV": "production"
+      },
+      "description": "HustleBot v2 - AI-powered business automation platform",
+      "capabilities": {
+        "tools": [
+          "generate_content",
+          "create_workflow",
+          "run_workflow",
+          "list_workflows",
+          "search_leads",
+          "enrich_lead",
+          "send_message",
+          "check_mailbox",
+          "reply_to_message",
+          "get_analytics",
+          "send_campaign",
+          "add_knowledge",
+          "search_knowledge",
+          "get_system_status"
+        ]
+      }
+    }
+  }
+}

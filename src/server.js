@@ -59,6 +59,8 @@ import { VoiceWorkflowRefinerAgent } from './agents/voice-workflow-refiner-agent
 import { WorkflowRefinementManager } from './core/workflow-refinement-manager.js';
 import { VoiceConversationAgent } from './agents/voice-conversation-agent.js';
 import { ConversationManager } from './core/conversation-manager.js';
+import { TelegramCommandCenter } from './telegram/command-center.js';
+import { RedisMailbox } from './core/mailbox-redis.js';
 
 class HustleBotServer {
   constructor() {
@@ -174,7 +176,14 @@ class HustleBotServer {
       // Initialize Mailbox and Workflow Registry (core systems)
       try {
         logger.info('📬 Initializing Mailbox system...');
-        this.mailbox = new Mailbox({ db: this.db });
+        // Use Redis mailbox if available, otherwise use database mailbox
+        if (process.env.REDIS_URL) {
+          logger.info('📬 Using Redis-based bidirectional mailbox');
+          this.mailbox = new RedisMailbox(process.env.REDIS_URL);
+        } else {
+          logger.info('📬 Using database mailbox (single-direction)');
+          this.mailbox = new Mailbox({ db: this.db });
+        }
         await this.mailbox.initialize();
         logger.info('✅ Mailbox ready');
       } catch (error) {
@@ -494,14 +503,22 @@ class HustleBotServer {
             await this.bot.telegram.setMyCommands([
               { command: 'start', description: 'Welcome & quick start' },
               { command: 'help', description: 'Show available commands' },
-              { command: 'status', description: 'Check service status' }
+              { command: 'status', description: 'Check service status' },
+              { command: 'menu', description: 'Command center' },
+              { command: 'generate', description: 'Generate content' },
+              { command: 'leads', description: 'Lead management' },
+              { command: 'workflows', description: 'Workflow automation' },
+              { command: 'analytics', description: 'View analytics' },
+              { command: 'system', description: 'System status' }
             ]);
             logger.info('✅ Commands registered with Telegram');
           } catch (error) {
             logger.warn('⚠️  Could not register commands:', error.message);
           }
 
-          logger.info('✅ Telegram bot ready');
+          // Launch the bot (start polling)
+          await this.bot.launch();
+          logger.info('✅ Telegram bot launched and polling');
         } catch (error) {
           logger.warn('⚠️  Telegram bot initialization failed:', error.message);
         }
@@ -2288,40 +2305,17 @@ class HustleBotServer {
 
     logger.info('📱 Setting up Telegram command handlers...');
 
-    // Handle /start command
+    // Initialize command center
+    const commandCenter = new TelegramCommandCenter(this.bot, this);
+    commandCenter.register();
+
+    // Handle /start command (show main menu)
     this.bot.command('start', async (ctx) => {
       try {
         logger.info(`/start command from user ${ctx.from.id}`);
-        await ctx.reply('👋 Welcome to HustleBot v2!\n\n📚 Send /help for available commands.');
+        await ctx.reply('👋 Welcome to HustleBot v2!\n\nLaunch the command center with /menu or use voice commands.');
       } catch (error) {
         logger.error('Error handling /start:', error);
-      }
-    });
-
-    // Handle /help command
-    this.bot.command('help', async (ctx) => {
-      try {
-        logger.info(`/help command from user ${ctx.from.id}`);
-        const helpMessage = `
-<b>🤖 HustleBot v2 Commands</b>
-
-<b>Core Commands:</b>
-/start - Welcome & quick start
-/help - This message
-/status - Check service status
-
-<b>Features Coming Soon:</b>
-• Landing page builder
-• Lead generation
-• Content creation
-• Video production
-• E-commerce automation
-
-For more info, visit https://hustlebot.io
-`;
-        await ctx.reply(helpMessage, { parse_mode: 'HTML' });
-      } catch (error) {
-        logger.error('Error handling /help:', error);
       }
     });
 
@@ -2329,7 +2323,7 @@ For more info, visit https://hustlebot.io
     this.bot.command('status', async (ctx) => {
       try {
         logger.info(`/status command from user ${ctx.from.id}`);
-        await ctx.reply('✅ HustleBot v2 is running and ready!\n\nMore features coming soon...');
+        await ctx.reply('✅ HustleBot v2 is running and ready!\n\nLaunch the command center with /menu');
       } catch (error) {
         logger.error('Error handling /status:', error);
       }
@@ -2451,6 +2445,43 @@ For more info, visit https://hustlebot.io
         logger.info(`🚀 Server listening on port ${this.port}`);
         logger.info(`📊 Health check: http://localhost:${this.port}/health`);
         logger.info(`🌐 Status: http://localhost:${this.port}/api/status`);
+      });
+
+      // Graceful shutdown
+      process.on('SIGINT', async () => {
+        logger.info('🛑 Received SIGINT, shutting down gracefully...');
+        if (this.bot) {
+          try {
+            await this.bot.stop();
+            logger.info('✅ Telegram bot stopped');
+          } catch (error) {
+            logger.error('Error stopping bot:', error.message);
+          }
+        }
+        if (this.server) {
+          this.server.close(() => {
+            logger.info('✅ Server closed');
+            process.exit(0);
+          });
+        }
+      });
+
+      process.on('SIGTERM', async () => {
+        logger.info('🛑 Received SIGTERM, shutting down gracefully...');
+        if (this.bot) {
+          try {
+            await this.bot.stop();
+            logger.info('✅ Telegram bot stopped');
+          } catch (error) {
+            logger.error('Error stopping bot:', error.message);
+          }
+        }
+        if (this.server) {
+          this.server.close(() => {
+            logger.info('✅ Server closed');
+            process.exit(0);
+          });
+        }
       });
     } catch (error) {
       logger.error('Failed to start server:', error);
