@@ -90,16 +90,23 @@ class HustleBotServer {
     this.initializationErrors = [];
   }
 
+  createApp() {
+    logger.info('🌐 Setting up Express server...');
+    this.app = express();
+    this.setupMiddleware();
+    this.setupRoutes();
+    logger.info('✅ Express server ready');
+    return this.app;
+  }
+
   async initialize() {
     logger.info('🚀 Initializing HustleBot v2...');
 
     try {
-      // Initialize Express
-      logger.info('🌐 Setting up Express server...');
-      this.app = express();
-      this.setupMiddleware();
-      this.setupRoutes();
-      logger.info('✅ Express server ready');
+      // Express app should already be created
+      if (!this.app) {
+        this.createApp();
+      }
 
       // Try to initialize Supabase (graceful failure)
       try {
@@ -2376,9 +2383,11 @@ if (isVercel) {
   // For Vercel serverless environment
   logger.info('🌐 Running in Vercel serverless environment');
 
-  // Initialize synchronously where possible, async for external services
+  // Create app synchronously so it's ready to export
+  server.createApp();
+
+  // Initialize services asynchronously in background
   try {
-    // This will initialize all services with graceful failure
     server.initialize().catch(err => {
       logger.error('Async initialization error (continuing):', err.message);
     });
