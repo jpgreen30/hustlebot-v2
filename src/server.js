@@ -2200,7 +2200,8 @@ class HustleBotServer {
       }
     });
 
-    // Handle voice messages
+    // Handle voice messages - TEMPORARILY DISABLED
+    /*
     this.bot.on('voice', async (ctx) => {
       try {
         logger.info(`🎤 Voice message from user ${ctx.from.id}`);
@@ -2269,6 +2270,7 @@ class HustleBotServer {
         await ctx.reply(`❌ Voice error: ${error.message}`);
       }
     });
+    */
 
     // Error handling
     this.bot.catch((err, ctx) => {
