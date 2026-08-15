@@ -47,6 +47,13 @@ class TelegramCommandCenter {
       await this.showSystemStatus(ctx);
     });
 
+    // AI Agent Commands
+    this.bot.command('agents', this.handleAgentsCommand.bind(this));
+    this.bot.command('deepseek', this.handleDeepseekCommand.bind(this));
+    this.bot.command('kimi', this.handleKimiCommand.bind(this));
+    this.bot.command('chatgpt', this.handleChatgptCommand.bind(this));
+    this.bot.command('grok', this.handleGrokCommand.bind(this));
+
     // Inline query for search
     this.bot.on('inline_query', this.handleInlineQuery.bind(this));
 
@@ -490,6 +497,168 @@ class TelegramCommandCenter {
       `Admin action requested.\n\n` +
       `Please confirm or provide details.`
     );
+  }
+
+  // AI Agent Commands
+  async handleAgentsCommand(ctx) {
+    try {
+      if (!this.server?.mailbox) {
+        await ctx.reply('❌ Mailbox system not available');
+        return;
+      }
+
+      const args = ctx.message.text.split(' ').slice(1);
+      if (args.length === 0 || args[0] === 'ping') {
+        await ctx.reply('🔄 Checking agent status... (this may take a few seconds)');
+
+        const agents = ['deepseek', 'kimi', 'chatgpt', 'grok'];
+        const results = [];
+
+        for (const agent of agents) {
+          try {
+            const msgId = await this.server.mailbox.send(agent, { type: 'ping' }, {
+              from: 'telegram',
+              ttl: 10000,
+              requiresAck: true
+            });
+            results.push(`✅ ${agent}: Connected`);
+          } catch (error) {
+            results.push(`⚠️ ${agent}: Offline`);
+          }
+        }
+
+        await ctx.reply(
+          '🤖 *Agent Status*\n\n' +
+          results.join('\n') +
+          '\n\n_Last updated: ' + new Date().toLocaleTimeString() + '_'
+        );
+      } else {
+        await ctx.reply(
+          '🤖 *AI Agents*\n\n' +
+          'Usage:\n' +
+          '/agents ping - Check all agents\n' +
+          '/deepseek [query] - Ask DeepSeek\n' +
+          '/kimi [query] - Ask Kimi\n' +
+          '/chatgpt [query] - Ask ChatGPT\n' +
+          '/grok [query] - Ask Grok'
+        );
+      }
+    } catch (error) {
+      logger.error('Error in agents command:', error);
+      await ctx.reply('❌ Error checking agents: ' + error.message);
+    }
+  }
+
+  async handleDeepseekCommand(ctx) {
+    await this.handleAgentQuery(ctx, 'deepseek', '🧠 DeepSeek', 'Chat, reasoning, voice analysis');
+  }
+
+  async handleKimiCommand(ctx) {
+    await this.handleAgentQuery(ctx, 'kimi', '💻 Kimi', 'Code reviews, architecture analysis');
+  }
+
+  async handleChatgptCommand(ctx) {
+    await this.handleAgentQuery(ctx, 'chatgpt', '🤝 ChatGPT', 'Reasoning, collaboration, complex tasks');
+  }
+
+  async handleGrokCommand(ctx) {
+    await this.handleAgentQuery(ctx, 'grok', '⚡ Grok', 'Unconventional thinking, wit');
+  }
+
+  async handleAgentQuery(ctx, agent, agentName, description) {
+    try {
+      if (!this.server?.mailbox) {
+        await ctx.reply('❌ Mailbox system not available');
+        return;
+      }
+
+      const query = ctx.message.text.split(' ').slice(1).join(' ');
+
+      if (!query) {
+        await ctx.reply(
+          `${agentName}\n\n` +
+          `${description}\n\n` +
+          `Usage: /${agent} [your question here]\n\n` +
+          `Example:\n` +
+          `/${agent} What is Node.js?\n` +
+          `/${agent} Explain quantum computing`
+        );
+        return;
+      }
+
+      const waitMsg = await ctx.reply(`⏳ Sending query to ${agentName}...`);
+
+      try {
+        const msgId = await this.server.mailbox.send(agent, {
+          type: 'query',
+          question: query,
+          timestamp: new Date().toISOString()
+        }, {
+          from: 'telegram',
+          ttl: 20000,
+          requiresAck: true
+        });
+
+        // Try to get response (with timeout)
+        const response = await this.waitForAgentResponse(agent, msgId, 15000);
+
+        if (response) {
+          await ctx.editMessageText(
+            `${agentName}\n\n` +
+            `*Your Query:*\n${query}\n\n` +
+            `*Response:*\n${response}`,
+            { parse_mode: 'Markdown' }
+          );
+        } else {
+          await ctx.editMessageText(
+            `${agentName}\n\n` +
+            `Query sent but no response received within timeout.\n` +
+            `Please try again or check if agent is online.`
+          );
+        }
+      } catch (error) {
+        await ctx.editMessageText(
+          `❌ ${agentName} Error\n\n` +
+          `Failed to reach agent: ${error.message}\n\n` +
+          `Try: /agents ping`
+        );
+      }
+    } catch (error) {
+      logger.error(`Error in ${agent} command:`, error);
+      await ctx.reply('❌ Error: ' + error.message);
+    }
+  }
+
+  async waitForAgentResponse(agent, messageId, timeout = 15000) {
+    const startTime = Date.now();
+    const pollInterval = 500;
+
+    while (Date.now() - startTime < timeout) {
+      try {
+        // Check if response exists in mailbox
+        const key = `response:${messageId}`;
+        if (this.server?.cache) {
+          const cached = await this.server.cache.get(key);
+          if (cached) {
+            return cached;
+          }
+        }
+
+        // Check in Redis if available
+        if (this.server?.mailbox?.redis) {
+          const cached = await this.server.mailbox.redis.get(key);
+          if (cached) {
+            return cached;
+          }
+        }
+      } catch (error) {
+        // Ignore errors in checking cache
+      }
+
+      await new Promise(resolve => setTimeout(resolve, pollInterval));
+    }
+
+    return null;
   }
 }
 

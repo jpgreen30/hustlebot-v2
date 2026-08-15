@@ -516,7 +516,12 @@ class HustleBotServer {
               { command: 'leads', description: 'Lead management' },
               { command: 'workflows', description: 'Workflow automation' },
               { command: 'analytics', description: 'View analytics' },
-              { command: 'system', description: 'System status' }
+              { command: 'system', description: 'System status' },
+              { command: 'agents', description: 'Check AI agent status' },
+              { command: 'deepseek', description: 'Ask DeepSeek AI' },
+              { command: 'kimi', description: 'Ask Kimi AI' },
+              { command: 'chatgpt', description: 'Ask ChatGPT' },
+              { command: 'grok', description: 'Ask Grok AI' }
             ]);
             logger.info('✅ Commands registered with Telegram');
           } catch (error) {
