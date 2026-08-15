@@ -476,14 +476,22 @@ class HustleBotServer {
             await this.bot.telegram.setMyCommands([
               { command: 'start', description: 'Welcome & quick start' },
               { command: 'help', description: 'Show available commands' },
-              { command: 'status', description: 'Check service status' }
+              { command: 'status', description: 'Check service status' },
+              { command: 'menu', description: 'Command center' },
+              { command: 'generate', description: 'Generate content' },
+              { command: 'leads', description: 'Lead management' },
+              { command: 'workflows', description: 'Workflow automation' },
+              { command: 'analytics', description: 'View analytics' },
+              { command: 'system', description: 'System status' }
             ]);
             logger.info('✅ Commands registered with Telegram');
           } catch (error) {
             logger.warn('⚠️  Could not register commands:', error.message);
           }
 
-          logger.info('✅ Telegram bot ready');
+          // Launch the bot (start polling)
+          await this.bot.launch();
+          logger.info('✅ Telegram bot launched and polling');
         } catch (error) {
           logger.warn('⚠️  Telegram bot initialization failed:', error.message);
         }
@@ -2269,6 +2277,43 @@ class HustleBotServer {
         logger.info(`🚀 Server listening on port ${this.port}`);
         logger.info(`📊 Health check: http://localhost:${this.port}/health`);
         logger.info(`🌐 Status: http://localhost:${this.port}/api/status`);
+      });
+
+      // Graceful shutdown
+      process.on('SIGINT', async () => {
+        logger.info('🛑 Received SIGINT, shutting down gracefully...');
+        if (this.bot) {
+          try {
+            await this.bot.stop();
+            logger.info('✅ Telegram bot stopped');
+          } catch (error) {
+            logger.error('Error stopping bot:', error.message);
+          }
+        }
+        if (this.server) {
+          this.server.close(() => {
+            logger.info('✅ Server closed');
+            process.exit(0);
+          });
+        }
+      });
+
+      process.on('SIGTERM', async () => {
+        logger.info('🛑 Received SIGTERM, shutting down gracefully...');
+        if (this.bot) {
+          try {
+            await this.bot.stop();
+            logger.info('✅ Telegram bot stopped');
+          } catch (error) {
+            logger.error('Error stopping bot:', error.message);
+          }
+        }
+        if (this.server) {
+          this.server.close(() => {
+            logger.info('✅ Server closed');
+            process.exit(0);
+          });
+        }
       });
     } catch (error) {
       logger.error('Failed to start server:', error);
