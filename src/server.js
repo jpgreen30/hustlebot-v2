@@ -2375,29 +2375,26 @@ For more info, visit https://hustlebot.io
 
 // Initialize server
 const server = new HustleBotServer();
-
-// Check if running in Vercel (serverless environment)
 const isVercel = !!process.env.VERCEL;
 
-if (isVercel) {
-  // For Vercel serverless environment
-  logger.info('🌐 Running in Vercel serverless environment');
-
-  // Create app synchronously so it's ready to export
-  server.createApp();
-
-  // Initialize services asynchronously in background
-  try {
-    server.initialize().catch(err => {
-      logger.error('Async initialization error (continuing):', err.message);
-    });
-  } catch (err) {
-    logger.error('Sync initialization error:', err.message);
-  }
-} else {
-  // For local/traditional deployment, start the server normally
+if (!isVercel) {
+  // Local development: start normally
   server.start();
 }
 
-// Export the app (Vercel will use this as the handler)
+// For Vercel: create app and return it immediately
+// Services initialize asynchronously on first request
+if (!server.app) {
+  server.createApp();
+}
+
+// Start background initialization (if Vercel)
+if (isVercel && !server._initStarted) {
+  server._initStarted = true;
+  server.initialize().catch(err => {
+    logger.error('Background initialization error:', err.message);
+  });
+}
+
+// Export the app
 export default server.app;
