@@ -2219,9 +2219,14 @@ class HustleBotServer {
           logger.info('Downloading voice file...');
           const voiceFile = await ctx.telegram.getFile(ctx.message.voice.file_id);
           const audioUrl = `https://api.telegram.org/file/bot${process.env.TELEGRAM_BOT_TOKEN}/${voiceFile.file_path}`;
+          logger.info(`Audio URL: ${audioUrl}`);
+
           const audioResponse = await fetch(audioUrl);
+          logger.info(`Fetch response received, status: ${audioResponse.status}`);
+          logger.info(`Response has buffer method: ${typeof audioResponse.buffer === 'function'}`);
+
           const audioBuffer = await audioResponse.buffer();
-          logger.info(`Audio buffer size: ${audioBuffer.length} bytes`);
+          logger.info(`Audio buffer created, size: ${audioBuffer.length} bytes`);
 
           // Convert voice to text
           logger.info('Converting speech to text...');
