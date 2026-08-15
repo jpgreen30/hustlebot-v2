@@ -38,6 +38,8 @@ import { SchedulingEngine } from './features/scheduling-engine.js';
 import { AnalyticsEngine } from './features/analytics-engine.js';
 import { CostOptimizer } from './features/cost-optimizer.js';
 import { MemorySystem } from './features/memory-system.js';
+import { VoiceWorkflowBuilderAgent } from './agents/voice-workflow-builder-agent.js';
+import { TranscriptProcessor } from './core/transcript-processor.js';
 
 class HustleBotServer {
   constructor() {
@@ -71,6 +73,9 @@ class HustleBotServer {
     this.analyticsEngine = null;
     this.costOptimizer = null;
     this.memorySystem = null;
+    // Phase 6 Features
+    this.voiceWorkflowBuilder = null;
+    this.transcriptProcessor = null;
   }
 
   async initialize() {
@@ -340,6 +345,27 @@ class HustleBotServer {
         logger.info('✅ Retell Integration ready');
       } catch (error) {
         logger.warn('⚠️  Retell Integration initialization failed, continuing:', error.message);
+      }
+
+      // Initialize Phase 6 Features (Voice Workflow Builder)
+      try {
+        logger.info('🎙️  Initializing Voice Workflow Builder Agent...');
+        this.voiceWorkflowBuilder = new VoiceWorkflowBuilderAgent(
+          { retell: this.retellIntegration },
+          this.workflowRegistry
+        );
+        await this.voiceWorkflowBuilder.initialize(this.llm, this.providers);
+        logger.info('✅ Voice Workflow Builder ready');
+      } catch (error) {
+        logger.warn('⚠️  Voice Workflow Builder initialization failed, continuing:', error.message);
+      }
+
+      try {
+        logger.info('📝 Initializing Transcript Processor...');
+        this.transcriptProcessor = new TranscriptProcessor();
+        logger.info('✅ Transcript Processor ready');
+      } catch (error) {
+        logger.warn('⚠️  Transcript Processor initialization failed, continuing:', error.message);
       }
 
       // Initialize Phase 5 Features
@@ -1647,6 +1673,68 @@ class HustleBotServer {
     this.app.get('/api/retell/status', (req, res) => {
       if (!this.retellIntegration) return res.status(503).json({ error: 'Retell integration not initialized' });
       res.json(this.retellIntegration.getStatus());
+    });
+
+    // Phase 6: Voice Workflow Builder routes
+    this.app.post('/api/voice/process-transcript', async (req, res) => {
+      try {
+        if (!this.transcriptProcessor) return res.status(503).json({ error: 'Transcript processor not initialized' });
+        const result = await this.transcriptProcessor.processCallTranscript(req.body);
+        res.json(result);
+      } catch (error) {
+        logger.error('Transcript processing error:', error);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.post('/api/voice/build-workflow', async (req, res) => {
+      try {
+        if (!this.transcriptProcessor || !this.voiceWorkflowBuilder) {
+          return res.status(503).json({ error: 'Voice workflow system not initialized' });
+        }
+        const { callId } = req.body;
+        const result = await this.transcriptProcessor.triggerWorkflowBuilding(callId, this.voiceWorkflowBuilder);
+        res.json(result);
+      } catch (error) {
+        logger.error('Workflow building error:', error);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.get('/api/voice/transcript/:callId', (req, res) => {
+      if (!this.transcriptProcessor) return res.status(503).json({ error: 'Transcript processor not initialized' });
+      const status = this.transcriptProcessor.getTranscriptStatus(req.params.callId);
+      res.json(status);
+    });
+
+    this.app.get('/api/voice/workflow/:callId', (req, res) => {
+      if (!this.transcriptProcessor) return res.status(503).json({ error: 'Transcript processor not initialized' });
+      const workflowId = this.transcriptProcessor.getWorkflowFromTranscript(req.params.callId);
+      res.json({ callId: req.params.callId, workflowId });
+    });
+
+    this.app.post('/api/voice/workflow/:workflowId/confirm', async (req, res) => {
+      try {
+        if (!this.voiceWorkflowBuilder) return res.status(503).json({ error: 'Voice workflow builder not initialized' });
+        const result = await this.voiceWorkflowBuilder.getWorkflowStatus({ workflowId: req.params.workflowId });
+        res.json(result);
+      } catch (error) {
+        logger.error('Workflow confirmation error:', error);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.get('/api/voice/status', (req, res) => {
+      if (!this.transcriptProcessor) return res.status(503).json({ error: 'Transcript processor not initialized' });
+      res.json({
+        transcriptProcessor: this.transcriptProcessor.getStats(),
+        voiceWorkflowBuilder: {
+          initialized: !!this.voiceWorkflowBuilder,
+          integrations: {
+            retell: !!this.retellIntegration
+          }
+        }
+      });
     });
 
     // 404 handler
