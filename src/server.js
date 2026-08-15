@@ -33,6 +33,7 @@ import { EmailIntegration } from './integrations/email-integration.js';
 import { DeploymentIntegration } from './integrations/deployment-integration.js';
 import { ScrapingIntegration } from './integrations/scraping-integration.js';
 import { EnrichmentIntegration } from './integrations/enrichment-integration.js';
+import { RetellIntegration } from './integrations/retell-integration.js';
 import { SchedulingEngine } from './features/scheduling-engine.js';
 import { AnalyticsEngine } from './features/analytics-engine.js';
 import { CostOptimizer } from './features/cost-optimizer.js';
@@ -64,6 +65,7 @@ class HustleBotServer {
     this.deploymentIntegration = null;
     this.scrapingIntegration = null;
     this.enrichmentIntegration = null;
+    this.retellIntegration = null;
     // Phase 5 Features
     this.schedulingEngine = null;
     this.analyticsEngine = null;
@@ -329,6 +331,15 @@ class HustleBotServer {
         logger.info('✅ Enrichment Integration ready');
       } catch (error) {
         logger.warn('⚠️  Enrichment Integration initialization failed, continuing:', error.message);
+      }
+
+      try {
+        logger.info('📞 Initializing Retell Integration...');
+        this.retellIntegration = new RetellIntegration();
+        await this.retellIntegration.initialize();
+        logger.info('✅ Retell Integration ready');
+      } catch (error) {
+        logger.warn('⚠️  Retell Integration initialization failed, continuing:', error.message);
       }
 
       // Initialize Phase 5 Features
@@ -1534,6 +1545,108 @@ class HustleBotServer {
     this.app.get('/api/memory/status', (req, res) => {
       if (!this.memorySystem) return res.status(503).json({ error: 'Memory system not initialized' });
       res.json(this.memorySystem.getStatus());
+    });
+
+    // Retell Integration Endpoints
+    this.app.post('/api/retell/create-agent', async (req, res) => {
+      try {
+        if (!this.retellIntegration) return res.status(503).json({ error: 'Retell integration not initialized' });
+        const { agentName, systemPrompt, config } = req.body;
+        const result = await this.retellIntegration.createAgent(agentName, systemPrompt, config);
+        res.json(result);
+      } catch (error) {
+        logger.error(`Retell error: ${error.message}`);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.post('/api/retell/outbound-call', async (req, res) => {
+      try {
+        if (!this.retellIntegration) return res.status(503).json({ error: 'Retell integration not initialized' });
+        const { agentId, phoneNumber, callContext } = req.body;
+        const result = await this.retellIntegration.initiateOutboundCall(agentId, phoneNumber, callContext);
+        res.json(result);
+      } catch (error) {
+        logger.error(`Retell error: ${error.message}`);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.post('/api/retell/inbound-call', async (req, res) => {
+      try {
+        if (!this.retellIntegration) return res.status(503).json({ error: 'Retell integration not initialized' });
+        const { agentId, phoneNumber, callData } = req.body;
+        const result = await this.retellIntegration.handleInboundCall(agentId, phoneNumber, callData);
+        res.json(result);
+      } catch (error) {
+        logger.error(`Retell error: ${error.message}`);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.get('/api/retell/transcript/:callId', async (req, res) => {
+      try {
+        if (!this.retellIntegration) return res.status(503).json({ error: 'Retell integration not initialized' });
+        const { callId } = req.params;
+        const result = await this.retellIntegration.getTranscript(callId);
+        res.json(result);
+      } catch (error) {
+        logger.error(`Retell error: ${error.message}`);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.get('/api/retell/analytics/:agentId', async (req, res) => {
+      try {
+        if (!this.retellIntegration) return res.status(503).json({ error: 'Retell integration not initialized' });
+        const { agentId } = req.params;
+        const result = await this.retellIntegration.getAgentAnalytics(agentId);
+        res.json(result);
+      } catch (error) {
+        logger.error(`Retell error: ${error.message}`);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.post('/api/retell/update-prompt', async (req, res) => {
+      try {
+        if (!this.retellIntegration) return res.status(503).json({ error: 'Retell integration not initialized' });
+        const { agentId, newPrompt } = req.body;
+        const result = await this.retellIntegration.updateAgentPrompt(agentId, newPrompt);
+        res.json(result);
+      } catch (error) {
+        logger.error(`Retell error: ${error.message}`);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.get('/api/retell/call-history/:agentId', async (req, res) => {
+      try {
+        if (!this.retellIntegration) return res.status(503).json({ error: 'Retell integration not initialized' });
+        const { agentId } = req.params;
+        const { limit } = req.query;
+        const result = await this.retellIntegration.getCallHistory(agentId, limit);
+        res.json(result);
+      } catch (error) {
+        logger.error(`Retell error: ${error.message}`);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.get('/api/retell/agents', async (req, res) => {
+      try {
+        if (!this.retellIntegration) return res.status(503).json({ error: 'Retell integration not initialized' });
+        const result = await this.retellIntegration.listAgents();
+        res.json(result);
+      } catch (error) {
+        logger.error(`Retell error: ${error.message}`);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.get('/api/retell/status', (req, res) => {
+      if (!this.retellIntegration) return res.status(503).json({ error: 'Retell integration not initialized' });
+      res.json(this.retellIntegration.getStatus());
     });
 
     // 404 handler
