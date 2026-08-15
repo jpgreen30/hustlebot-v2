@@ -8,6 +8,7 @@
     "dev": "node --watch src/server.js",
     "start": "node src/server.js",
     "mcp": "node src/mcp/index.js",
+    "connectors": "node src/mcp/connectors/index.js",
     "mcp:build": "node scripts/build-mcp.js",
     "mcp:validate": "node scripts/validate-tools.js",
     "db:migrate": "node scripts/migrate.js",
