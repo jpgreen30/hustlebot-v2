@@ -181,7 +181,7 @@ class BaseAgent {
   getStats() {
     return {
       name: this.name,
-      executions: this.executionCount,
+      executionCount: this.executionCount,
       totalCost: parseFloat(this.totalCost.toFixed(4)),
       averageCost: this.executionCount > 0 
         ? parseFloat((this.totalCost / this.executionCount).toFixed(4))

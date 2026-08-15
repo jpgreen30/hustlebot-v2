@@ -32,10 +32,13 @@ class ContentFactory {
       callTimeout: config.callTimeout || 30000
     });
 
-    // Job queue for async content generation
+    // Job queue for async content generation. Sharing the mailbox's Redis
+    // client (when the server passes one) keeps jobs durable across restarts.
     this.jobQueue = new JobQueue({
       maxConcurrent: config.maxConcurrentJobs || 3,
-      jobTimeout: config.jobTimeout || 300000 // 5 minutes total
+      jobTimeout: config.jobTimeout || 300000, // 5 minutes total
+      redis: config.redis || null,
+      namespace: 'jobs:content'
     });
 
     this.pipeline = {
@@ -76,8 +79,20 @@ class ContentFactory {
         logger.warn('⚠️  LLM not configured, content generation disabled');
       }
 
+      // The queue stores payloads, not closures, so the work itself is
+      // registered here by job type and looked up when a job is claimed.
+      this.jobQueue.registerHandler('content-generation', async ({ topic, contentType, options }) => {
+        return this.generateContent(topic, contentType, options);
+      });
+
+      await this.jobQueue.start();
+
       // Clean up old jobs periodically
-      setInterval(() => this.jobQueue.cleanup(), 3600000); // Every hour
+      const cleanupTimer = setInterval(
+        () => this.jobQueue.cleanup().catch((e) => logger.error(`Job cleanup failed: ${e.message}`)),
+        3600000
+      );
+      if (cleanupTimer.unref) cleanupTimer.unref();
 
       logger.info('✅ Content Factory initialized');
       logger.info(`📊 Domain context: ${this.domainContext}`);
@@ -93,7 +108,7 @@ class ContentFactory {
    * Start async content generation job
    * Returns job ID for tracking progress
    */
-  startContentGeneration(topic, contentType = 'guide', options = {}) {
+  async startContentGeneration(topic, contentType = 'guide', options = {}) {
     try {
       // Validate input
       if (!topic || topic.length > 500) {
@@ -103,14 +118,10 @@ class ContentFactory {
         throw new Error(`Invalid content type: ${contentType}`);
       }
 
-      const jobId = this.jobQueue.createJob('content-generation', {
+      const jobId = await this.jobQueue.createJob('content-generation', {
         topic,
         contentType,
-        options,
-        execute: async () => {
-          const result = await this.generateContent(topic, contentType, options);
-          this.jobQueue.setResult(jobId, result);
-        }
+        options
       });
 
       logger.info(`📋 Content generation job started: ${jobId}`);
@@ -124,7 +135,7 @@ class ContentFactory {
   /**
    * Get job status
    */
-  getJobStatus(jobId) {
+  async getJobStatus(jobId) {
     return this.jobQueue.getJob(jobId);
   }
 

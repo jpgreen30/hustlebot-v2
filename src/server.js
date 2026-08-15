@@ -216,7 +216,10 @@ class HustleBotServer {
           imageGenerator: this.providers,
           domainContext: process.env.CONTENT_DOMAIN || 'parenting and family wellness',
           maxConcurrentJobs: parseInt(process.env.MAX_CONCURRENT_JOBS || '3'),
-          callTimeout: parseInt(process.env.CONTENT_CALL_TIMEOUT || '30000')
+          callTimeout: parseInt(process.env.CONTENT_CALL_TIMEOUT || '30000'),
+          // Reuse the mailbox's Redis connection so queued jobs survive a
+          // restart. Without it the queue falls back to in-memory storage.
+          redis: this.mailbox?.redis || null
         });
         await this.contentFactory.initialize();
         logger.info('✅ Content Factory ready');
@@ -791,7 +794,7 @@ class HustleBotServer {
     });
 
     // Async content generation (job-based)
-    this.app.post('/api/content/generate-async', (req, res) => {
+    this.app.post('/api/content/generate-async', async (req, res) => {
       try {
         if (!this.contentFactory) {
           return res.status(503).json({ error: 'Content Factory not initialized' });
@@ -803,7 +806,7 @@ class HustleBotServer {
           return res.status(400).json({ error: 'topic required' });
         }
 
-        const jobId = this.contentFactory.startContentGeneration(topic, contentType, options);
+        const jobId = await this.contentFactory.startContentGeneration(topic, contentType, options);
         res.json({
           jobId,
           status: 'queued',
@@ -816,13 +819,13 @@ class HustleBotServer {
     });
 
     // Check job status
-    this.app.get('/api/content/job/:jobId', (req, res) => {
+    this.app.get('/api/content/job/:jobId', async (req, res) => {
       try {
         if (!this.contentFactory) {
           return res.status(503).json({ error: 'Content Factory not initialized' });
         }
 
-        const job = this.contentFactory.getJobStatus(req.params.jobId);
+        const job = await this.contentFactory.getJobStatus(req.params.jobId);
 
         if (!job) {
           return res.status(404).json({ error: 'Job not found' });
@@ -836,13 +839,13 @@ class HustleBotServer {
     });
 
     // Job queue stats
-    this.app.get('/api/content/queue-stats', (req, res) => {
+    this.app.get('/api/content/queue-stats', async (req, res) => {
       try {
         if (!this.contentFactory) {
           return res.status(503).json({ error: 'Content Factory not initialized' });
         }
 
-        res.json(this.contentFactory.jobQueue.getStats());
+        res.json(await this.contentFactory.jobQueue.getStats());
       } catch (error) {
         logger.error(`Queue stats error: ${error.message}`);
         res.status(500).json({ error: error.message });
