@@ -14,6 +14,7 @@ import helmet from 'helmet';
 import cors from 'cors';
 import logger from './utils/logger.js';
 import { ProviderAbstraction } from './core/provider-abstraction.js';
+import { ContentFactory } from './factories/content-factory.js';
 
 class HustleBotServer {
   constructor() {
@@ -21,6 +22,7 @@ class HustleBotServer {
     this.server = null;
     this.port = process.env.PORT || 3000;
     this.providers = null;
+    this.contentFactory = null;
   }
 
   async initialize() {
@@ -77,6 +79,20 @@ class HustleBotServer {
         logger.info('✅ Provider abstraction ready');
       } catch (error) {
         logger.warn('⚠️  Provider abstraction initialization failed, continuing:', error.message);
+      }
+
+      // Initialize Content Factory
+      try {
+        logger.info('📝 Initializing Content Factory...');
+        this.contentFactory = new ContentFactory({
+          db: this.db,
+          llm: this.llm,
+          imageGenerator: this.providers
+        });
+        await this.contentFactory.initialize();
+        logger.info('✅ Content Factory ready');
+      } catch (error) {
+        logger.warn('⚠️  Content Factory initialization failed, continuing:', error.message);
       }
 
       // Try to initialize Telegram bot (graceful failure)
@@ -142,6 +158,7 @@ class HustleBotServer {
     this.app.get('/api/status', (req, res) => {
       const providerStatus = this.providers ? this.providers.getProviderStatus() : null;
       const storageStatus = this.providers ? this.providers.getProviderStatus().storage.status : null;
+      const contentStatus = this.contentFactory ? this.contentFactory.getStatus() : null;
 
       res.json({
         status: 'running',
@@ -152,6 +169,7 @@ class HustleBotServer {
         voice: this.voice ? 'ready' : 'unavailable',
         providers: providerStatus,
         storage: storageStatus,
+        content_factory: contentStatus,
         bot_token_set: !!process.env.TELEGRAM_BOT_TOKEN,
         deepgram_key_set: !!process.env.DEEPGRAM_API_KEY,
         features: {
@@ -159,7 +177,8 @@ class HustleBotServer {
           ai_responses: !!this.llm,
           voice_messages: !!this.voice,
           image_generation: !!this.llm,
-          streaming: !!this.providers
+          streaming: !!this.providers,
+          content_generation: !!this.contentFactory
         },
         timestamp: new Date().toISOString()
       });
@@ -214,6 +233,43 @@ class HustleBotServer {
     });
 
 
+    // Content Factory endpoints
+    this.app.post('/api/content/generate', async (req, res) => {
+      try {
+        if (!this.contentFactory) {
+          return res.status(503).json({ error: 'Content Factory not initialized' });
+        }
+
+        const { topic, contentType = 'guide', options = {} } = req.body;
+
+        if (!topic) {
+          return res.status(400).json({ error: 'topic required' });
+        }
+
+        const result = await this.contentFactory.generateContent(topic, contentType, options);
+        res.json(result);
+      } catch (error) {
+        logger.error(`Content generation error: ${error.message}`);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.get('/api/content/status', (req, res) => {
+      if (!this.contentFactory) {
+        return res.status(503).json({ error: 'Content Factory not initialized' });
+      }
+
+      res.json(this.contentFactory.getStatus());
+    });
+
+    this.app.get('/api/content/metrics', (req, res) => {
+      if (!this.contentFactory) {
+        return res.status(503).json({ error: 'Content Factory not initialized' });
+      }
+
+      res.json(this.contentFactory.getMetrics());
+    });
+
     // Debug endpoint
     this.app.get('/api/debug', (req, res) => {
       res.json({
@@ -251,7 +307,12 @@ class HustleBotServer {
         endpoints: {
           health: '/health',
           status: '/api/status',
-          streaming: 'POST /api/stream'
+          streaming: 'POST /api/stream',
+          content_factory: {
+            generate: 'POST /api/content/generate',
+            status: 'GET /api/content/status',
+            metrics: 'GET /api/content/metrics'
+          }
         }
       });
     });
