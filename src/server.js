@@ -2374,38 +2374,21 @@ For more info, visit https://hustlebot.io
 }
 
 // Initialize server
-let server;
-let initialized = false;
+const server = new HustleBotServer();
+server.createApp();
 
-try {
-  server = new HustleBotServer();
-  server.createApp();
-  initialized = true;
-
-  // Start background initialization async
-  process.nextTick(() => {
-    if (process.env.VERCEL && server) {
-      server.initialize().catch(() => {
-        // Silent failure for background init
-      });
-    }
-  });
-
-  // For local/non-Vercel, start the server
-  if (!process.env.VERCEL) {
-    server.start();
-  }
-} catch (error) {
-  console.error('Failed to initialize:', error.message);
-  // Create minimal fallback
-  server = new HustleBotServer();
-  server.createApp();
+// Local start
+if (!process.env.VERCEL) {
+  server.start();
 }
 
-// Export handler for Vercel
-export default (req, res) => {
-  if (server && server.app) {
-    return server.app(req, res);
+// Async initialization (background)
+setTimeout(() => {
+  if (process.env.VERCEL && server && !server._initStarted) {
+    server._initStarted = true;
+    server.initialize().catch(() => {});
   }
-  res.status(500).json({ error: 'Server not initialized' });
-};
+}, 100);
+
+// Export for Vercel
+export default server.app;
