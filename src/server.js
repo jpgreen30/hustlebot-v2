@@ -2394,5 +2394,8 @@ if (!process.env.VERCEL) {
   server.start();
 }
 
-// Export app for Vercel (this must be the very last line in the file)
-export default server.app;
+// Export handler for Vercel
+export default (req, res) => {
+  // Pass the request to the Express app
+  return server.app(req, res);
+};
