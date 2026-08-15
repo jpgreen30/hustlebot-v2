@@ -1,0 +1,10 @@
+node_modules
+.git
+.env.local
+.env.*.local
+npm-debug.log*
+.DS_Store
+.claude
+.next
+build
+dist
