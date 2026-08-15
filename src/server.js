@@ -86,6 +86,8 @@ class HustleBotServer {
     // Phase 8 Features
     this.voiceConversationAgent = null;
     this.conversationManager = null;
+    // Diagnostics
+    this.initializationErrors = [];
   }
 
   async initialize() {
@@ -108,6 +110,7 @@ class HustleBotServer {
         this.db = db;
       } catch (error) {
         logger.warn('⚠️  Supabase connection failed, continuing without DB:', error.message);
+        this.initializationErrors.push({ module: 'supabase', error: error.message });
       }
 
       // Try to initialize OpenRouter (graceful failure)
@@ -119,6 +122,7 @@ class HustleBotServer {
         this.llm = llm;
       } catch (error) {
         logger.warn('⚠️  OpenRouter initialization failed, continuing:', error.message);
+        this.initializationErrors.push({ module: 'openrouter', error: error.message });
       }
 
       // Try to initialize Deepgram voice (graceful failure)
@@ -142,6 +146,7 @@ class HustleBotServer {
         logger.info('✅ Provider abstraction ready');
       } catch (error) {
         logger.warn('⚠️  Provider abstraction initialization failed, continuing:', error.message);
+        this.initializationErrors.push({ module: 'providers', error: error.message });
       }
 
       // Initialize Mailbox and Workflow Registry (core systems)
@@ -486,6 +491,7 @@ class HustleBotServer {
       return true;
     } catch (error) {
       logger.error('❌ Initialization failed:', error);
+      this.initializationErrors.push({ module: 'core', error: error.message, stack: error.stack });
       throw error;
     }
   }
@@ -511,6 +517,71 @@ class HustleBotServer {
         timestamp: new Date().toISOString(),
         service: 'hustlebot-v2'
       });
+    });
+
+    // Diagnostics endpoint
+    this.app.get('/api/diagnostics', (req, res) => {
+      const diag = {
+        timestamp: new Date().toISOString(),
+        environment: {
+          node_env: process.env.NODE_ENV,
+          vercel: !!process.env.VERCEL,
+          port: this.port
+        },
+        initialization: {
+          app: !!this.app,
+          providers: !!this.providers,
+          db: !!this.db,
+          llm: !!this.llm,
+          voice: !!this.voice,
+          bot: !!this.bot
+        },
+        factories: {
+          content: !!this.contentFactory,
+          email: !!this.emailFactory,
+          lead: !!this.leadFactory,
+          knowledge: !!this.knowledgeFactory,
+          site: !!this.siteFactory,
+          video: !!this.videoFactory,
+          commerce: !!this.commerceFactory,
+          brand: !!this.brandFactory
+        },
+        systems: {
+          mailbox: !!this.mailbox,
+          workflows: !!this.workflowRegistry,
+          n8n: !!this.n8nIntegration
+        },
+        integrations: {
+          payment: !!this.paymentIntegration,
+          social: !!this.socialIntegration,
+          image: !!this.imageIntegration,
+          shopify: !!this.shopifyIntegration,
+          email: !!this.emailIntegration,
+          deployment: !!this.deploymentIntegration,
+          scraping: !!this.scrapingIntegration,
+          enrichment: !!this.enrichmentIntegration
+        },
+        features: {
+          scheduling: !!this.schedulingEngine,
+          analytics: !!this.analyticsEngine,
+          cost_optimization: !!this.costOptimizer,
+          memory: !!this.memorySystem
+        },
+        phase8: {
+          voice_conversation_agent: !!this.voiceConversationAgent,
+          conversation_manager: !!this.conversationManager
+        },
+        phase7: {
+          voice_workflow_refiner: !!this.voiceWorkflowRefiner,
+          refinement_manager: !!this.refinementManager
+        },
+        phase6: {
+          voice_workflow_builder: !!this.voiceWorkflowBuilder,
+          transcript_processor: !!this.transcriptProcessor
+        },
+        initialization_errors: this.initializationErrors || []
+      };
+      res.json(diag);
     });
 
     // Status endpoint
