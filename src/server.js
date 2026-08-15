@@ -184,7 +184,14 @@ class HustleBotServer {
           logger.info('📬 Using database mailbox (single-direction)');
           this.mailbox = new Mailbox({ db: this.db });
         }
-        await this.mailbox.initialize();
+        // Add 5-second timeout to mailbox init so we don't block server startup
+        logger.info('📬 Connecting to mailbox (5s timeout)...');
+        await Promise.race([
+          this.mailbox.initialize(),
+          new Promise((_, reject) =>
+            setTimeout(() => reject(new Error('Mailbox init timeout - continuing without mailbox')), 5000)
+          )
+        ]);
         logger.info('✅ Mailbox ready');
       } catch (error) {
         logger.warn('⚠️  Mailbox initialization failed, continuing:', error.message);
