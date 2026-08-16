@@ -297,7 +297,9 @@ export function mountOAuth(app, { ownerToken, provider } = {}) {
   // RFC 7591 dynamic client registration.
   app.post('/oauth/register', (req, res) => {
     try {
+      logger.info(`🔑 OAuth registration request from ${req.ip}: ${JSON.stringify(req.body)}`);
       const client = oauth.registerClient(req.body || {});
+      logger.info(`🔑 Successfully registered client ${client.client_id}`);
       res.status(201).json(client);
     } catch (error) {
       logger.warn(`OAuth registration rejected: ${error.message}`);
@@ -320,8 +322,10 @@ export function mountOAuth(app, { ownerToken, provider } = {}) {
       scope
     } = req.query;
 
+    logger.debug(`🔑 Authorize request for client ${clientId}, registered clients: ${Array.from(oauth.clients.keys()).join(', ')}`);
     const client = oauth.clients.get(clientId);
     if (!client) {
+      logger.warn(`🔑 Unknown client ${clientId} in authorize request from ${req.ip}`);
       return res.status(400).send(renderError('Unknown client', 'Register the client first.'));
     }
     if (!client.redirect_uris.includes(redirectUri)) {
