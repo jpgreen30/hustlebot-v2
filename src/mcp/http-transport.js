@@ -25,6 +25,7 @@ import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import { timingSafeEqual } from 'crypto';
 import logger from '../utils/logger.js';
 import { HustleBotMCPServer } from './server.js';
+import { mountOAuth, baseUrlFrom } from './oauth.js';
 
 const MESSAGE_PATH = '/mcp/messages';
 
@@ -72,25 +73,53 @@ export function mountMcpEndpoint(app, hustlebot, options = {}) {
   // sessionId -> { transport, server, openedAt }
   const sessions = new Map();
 
+  // OAuth 2.1 is what remote clients like Claude actually use; the static
+  // token still works for curl and CLI clients.
+  const oauth = options.oauth || mountOAuth(app, { ownerToken: token });
+
   const requireAuth = (req, res, next) => {
-    if (!tokenMatches(extractToken(req), token)) {
-      logger.warn(`🔒 Rejected unauthenticated MCP request from ${req.ip}`);
-      res.status(401).json({ error: 'Unauthorized' });
-      return;
+    const presented = extractToken(req);
+
+    if (presented) {
+      if (tokenMatches(presented, token)) return next();
+
+      const resource = `${baseUrlFrom(req)}/mcp/sse`;
+      const grant = oauth.validateAccessToken(presented, resource);
+      if (grant) {
+        req.mcpClientId = grant.clientId;
+        return next();
+      }
     }
-    next();
+
+    // RFC 9728 section 5.1: a 401 must point the client at the resource
+    // metadata so it can discover how to authorize. Without this header
+    // Claude cannot start the OAuth flow.
+    const metadataUrl = `${baseUrlFrom(req)}/.well-known/oauth-protected-resource`;
+    res.setHeader(
+      'WWW-Authenticate',
+      `Bearer realm="hustlebot", resource_metadata="${metadataUrl}"`
+    );
+    logger.warn(`🔒 Rejected unauthenticated MCP request from ${req.ip}`);
+    res.status(401).json({ error: 'Unauthorized', resource_metadata: metadataUrl });
   };
 
   // Unauthenticated, deliberately: lets a connector confirm the endpoint
   // exists without revealing anything about the tools.
   app.get('/mcp/health', (req, res) => {
+    const base = baseUrlFrom(req);
     res.json({
       status: 'ok',
       transport: 'sse',
       sse: '/mcp/sse',
       messages: MESSAGE_PATH,
       activeSessions: sessions.size,
-      authRequired: true
+      authRequired: true,
+      auth: {
+        oauth: true,
+        staticToken: true,
+        resourceMetadata: `${base}/.well-known/oauth-protected-resource`,
+        authorizationServer: `${base}/.well-known/oauth-authorization-server`
+      }
     });
   });
 
@@ -148,8 +177,8 @@ export function mountMcpEndpoint(app, hustlebot, options = {}) {
     }
   });
 
-  logger.info('🔌 Remote MCP endpoint mounted at /mcp/sse (bearer token required)');
-  return { mounted: true, sessions };
+  logger.info('🔌 Remote MCP endpoint mounted at /mcp/sse (OAuth 2.1 or static bearer token)');
+  return { mounted: true, sessions, oauth };
 }
 
 export { MESSAGE_PATH };
