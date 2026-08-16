@@ -392,17 +392,7 @@ function renderPage(title, body) {
 }
 
 function renderConsent({ clientName, params, error }) {
-  const hidden = Object.entries({
-    client_id: params.clientId,
-    redirect_uri: params.redirectUri,
-    code_challenge: params.codeChallenge,
-    state: params.state,
-    resource: params.resource,
-    scope: params.scope
-  })
-    .filter(([, v]) => v != null && v !== '')
-    .map(([k, v]) => `<input type="hidden" name="${k}" value="${escapeHtml(v)}">`)
-    .join('');
+  const paramsJson = escapeHtml(JSON.stringify(params));
 
   return renderPage(
     'Connect to HustleBot',
@@ -410,12 +400,58 @@ function renderConsent({ clientName, params, error }) {
      <p>This grants access to your platform tools, including ones that spend money and send email.
         Consequential actions will still ask for approval.</p>
      ${error ? `<p class="err">${escapeHtml(error)}</p>` : ''}
-     <form method="POST" action="/oauth/authorize">
-       ${hidden}
+     <form id="consent-form" onsubmit="handleConsent(event, ${paramsJson})">
        <label for="owner_token">Paste your MCP access token</label>
        <input id="owner_token" type="password" name="owner_token" autocomplete="off" autofocus required>
        <button type="submit">Authorize</button>
-     </form>`
+     </form>
+     <script>
+       async function handleConsent(event, params) {
+         event.preventDefault();
+         const token = document.getElementById('owner_token').value;
+         const button = event.target.querySelector('button');
+         button.disabled = true;
+         button.textContent = 'Authorizing...';
+
+         try {
+           const response = await fetch('/oauth/authorize', {
+             method: 'POST',
+             headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+             redirect: 'manual',
+             body: new URLSearchParams({
+               client_id: params.clientId,
+               redirect_uri: params.redirectUri,
+               code_challenge: params.codeChallenge,
+               state: params.state || '',
+               resource: params.resource || '',
+               scope: params.scope || '',
+               owner_token: token
+             })
+           });
+
+           if (response.status >= 300 && response.status < 400) {
+             // Successful redirect - follow the location header
+             const location = response.headers.get('location');
+             if (location) {
+               window.location.href = location;
+               return;
+             }
+           }
+
+           if (!response.ok) {
+             const text = await response.text();
+             const match = text.match(/<p class="err">([^<]+)<\\/p>/);
+             const errMsg = match ? match[1] : 'Authorization failed';
+             document.body.innerHTML = '<h1>Error</h1><p>' + errMsg + '</p>';
+             return;
+           }
+         } catch (error) {
+           button.disabled = false;
+           button.textContent = 'Authorize';
+           alert('Authorization error: ' + error.message);
+         }
+       }
+     </script>`
   );
 }
 
