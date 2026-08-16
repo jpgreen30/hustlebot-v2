@@ -102,6 +102,7 @@ class OAuthProvider {
       }
       const clientsArray = Array.from(this.clients.values());
       writeFileSync(CLIENTS_FILE, JSON.stringify(clientsArray, null, 2), 'utf-8');
+      logger.debug(`🔑 Saved ${clientsArray.length} OAuth clients to disk`);
     } catch (error) {
       logger.error(`Failed to save OAuth clients to disk: ${error.message}`);
     }
