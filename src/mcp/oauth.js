@@ -193,10 +193,14 @@ class OAuthProvider {
       this.accessTokens.delete(token);
       return null;
     }
+
     if (expectedResource && entry.resource) {
-      // Compare host+path, ignoring a trailing slash.
+      // Compare host+path, ignoring a trailing slash. A list is accepted
+      // because this server exposes more than one MCP endpoint URL and a
+      // client may have named any of them as the canonical resource.
       const norm = (u) => String(u).replace(/\/$/, '').toLowerCase();
-      if (norm(entry.resource) !== norm(expectedResource)) return null;
+      const accepted = (Array.isArray(expectedResource) ? expectedResource : [expectedResource]).map(norm);
+      if (!accepted.includes(norm(entry.resource))) return null;
     }
     return entry;
   }

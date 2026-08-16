@@ -22,7 +22,8 @@
  */
 
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
-import { timingSafeEqual } from 'crypto';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { randomUUID, timingSafeEqual } from 'crypto';
 import logger from '../utils/logger.js';
 import { HustleBotMCPServer } from './server.js';
 import { mountOAuth, baseUrlFrom } from './oauth.js';
@@ -71,7 +72,8 @@ export function mountMcpEndpoint(app, hustlebot, options = {}) {
   }
 
   // sessionId -> { transport, server, openedAt }
-  const sessions = new Map();
+  const sessions = new Map();       // SSE transport
+  const streamSessions = new Map(); // streamable HTTP transport
 
   // OAuth 2.1 is what remote clients like Claude actually use; the static
   // token still works for curl and CLI clients.
@@ -83,8 +85,14 @@ export function mountMcpEndpoint(app, hustlebot, options = {}) {
     if (presented) {
       if (tokenMatches(presented, token)) return next();
 
-      const resource = `${baseUrlFrom(req)}/mcp/sse`;
-      const grant = oauth.validateAccessToken(presented, resource);
+      // Both transports live on this server, and a client may name either
+      // as the canonical resource, so accept any of them as the audience.
+      const base = baseUrlFrom(req);
+      const grant = oauth.validateAccessToken(presented, [
+        `${base}/mcp`,
+        `${base}/mcp/sse`,
+        base
+      ]);
       if (grant) {
         req.mcpClientId = grant.clientId;
         return next();
@@ -109,10 +117,12 @@ export function mountMcpEndpoint(app, hustlebot, options = {}) {
     const base = baseUrlFrom(req);
     res.json({
       status: 'ok',
-      transport: 'sse',
+      // Both are live: newer clients use streamable HTTP, older ones SSE.
+      transports: ['streamable-http', 'sse'],
+      streamableHttp: '/mcp',
       sse: '/mcp/sse',
       messages: MESSAGE_PATH,
-      activeSessions: sessions.size,
+      activeSessions: sessions.size + streamSessions.size,
       authRequired: true,
       auth: {
         oauth: true,
@@ -153,6 +163,72 @@ export function mountMcpEndpoint(app, hustlebot, options = {}) {
       if (!res.headersSent) res.status(500).json({ error: error.message });
     }
   });
+
+  // ---- Streamable HTTP (the current transport) ---------------------------
+  //
+  // One endpoint handling POST (client messages), GET (server stream) and
+  // DELETE (end session), with the session carried in the mcp-session-id
+  // header. Newer clients prefer this; SSE below stays mounted for older
+  // ones, so Claude, ChatGPT and Grok can each use whichever they support.
+  const handleStreamable = async (req, res) => {
+    try {
+      const sessionId = req.headers['mcp-session-id'];
+      const existing = sessionId ? streamSessions.get(sessionId) : null;
+
+      // '/mcp' does not match the '/mcp/' skip in setupMiddleware, so
+      // express.json has already parsed the body. The SDK accepts it as a
+      // third argument for exactly this case.
+      const parsedBody = req.method === 'POST' ? req.body : undefined;
+
+      if (existing) {
+        await existing.transport.handleRequest(req, res, parsedBody);
+        return;
+      }
+
+      // No session yet: only an initialize request may open one.
+      if (req.method !== 'POST') {
+        res.status(400).json({
+          jsonrpc: '2.0',
+          error: { code: -32000, message: 'Missing or expired mcp-session-id' },
+          id: null
+        });
+        return;
+      }
+
+      const transport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: () => randomUUID(),
+        onsessioninitialized: (id) => {
+          streamSessions.set(id, { transport, server: mcp, openedAt: Date.now() });
+          logger.info(`🔌 MCP client connected over streamable HTTP: ${id}`);
+        }
+      });
+
+      const mcp = new HustleBotMCPServer(hustlebot);
+
+      transport.onclose = () => {
+        const id = transport.sessionId;
+        if (id && streamSessions.delete(id)) {
+          logger.info(`🔌 MCP streamable session closed: ${id}`);
+        }
+      };
+
+      await mcp.server.connect(transport);
+      await transport.handleRequest(req, res, parsedBody);
+    } catch (error) {
+      logger.error(`Streamable HTTP request failed: ${error.message}`);
+      if (!res.headersSent) {
+        res.status(500).json({
+          jsonrpc: '2.0',
+          error: { code: -32603, message: error.message },
+          id: null
+        });
+      }
+    }
+  };
+
+  app.post('/mcp', requireAuth, handleStreamable);
+  app.get('/mcp', requireAuth, handleStreamable);
+  app.delete('/mcp', requireAuth, handleStreamable);
 
   app.post(MESSAGE_PATH, requireAuth, async (req, res) => {
     const sessionId = req.query.sessionId;
