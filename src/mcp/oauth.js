@@ -417,6 +417,7 @@ function renderConsent({ clientName, params, error }) {
            const response = await fetch('/oauth/authorize', {
              method: 'POST',
              headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+             redirect: 'manual',
              body: new URLSearchParams({
                client_id: params.clientId,
                redirect_uri: params.redirectUri,
@@ -428,6 +429,15 @@ function renderConsent({ clientName, params, error }) {
              })
            });
 
+           if (response.status >= 300 && response.status < 400) {
+             // Successful redirect - follow the location header
+             const location = response.headers.get('location');
+             if (location) {
+               window.location.href = location;
+               return;
+             }
+           }
+
            if (!response.ok) {
              const text = await response.text();
              const match = text.match(/<p class="err">([^<]+)<\\/p>/);
@@ -435,9 +445,6 @@ function renderConsent({ clientName, params, error }) {
              document.body.innerHTML = '<h1>Error</h1><p>' + errMsg + '</p>';
              return;
            }
-
-           // Success - server redirects us
-           window.location.href = response.url;
          } catch (error) {
            button.disabled = false;
            button.textContent = 'Authorize';
