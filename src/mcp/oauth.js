@@ -26,7 +26,14 @@
  */
 
 import { randomBytes, createHash, timingSafeEqual } from 'crypto';
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
+import { dirname, join } from 'path';
+import { fileURLToPath } from 'url';
 import logger from '../utils/logger.js';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const CLIENTS_FILE = join(__dirname, '..', '.data', 'oauth-clients.json');
+const DATA_DIR = dirname(CLIENTS_FILE);
 
 const rand = (bytes = 32) => randomBytes(bytes).toString('base64url');
 
@@ -69,6 +76,35 @@ class OAuthProvider {
     this.codes = new Map();         // code -> { clientId, redirectUri, challenge, resource, scope, expiresAt }
     this.accessTokens = new Map();  // token -> { clientId, resource, scope, expiresAt }
     this.refreshTokens = new Map(); // token -> { clientId, resource, scope }
+
+    this.loadClients();
+  }
+
+  loadClients() {
+    try {
+      if (existsSync(CLIENTS_FILE)) {
+        const data = readFileSync(CLIENTS_FILE, 'utf-8');
+        const clientsArray = JSON.parse(data);
+        clientsArray.forEach(client => {
+          this.clients.set(client.client_id, client);
+        });
+        logger.info(`🔑 Loaded ${clientsArray.length} OAuth clients from disk`);
+      }
+    } catch (error) {
+      logger.warn(`Failed to load OAuth clients from disk: ${error.message}`);
+    }
+  }
+
+  saveClients() {
+    try {
+      if (!existsSync(DATA_DIR)) {
+        mkdirSync(DATA_DIR, { recursive: true });
+      }
+      const clientsArray = Array.from(this.clients.values());
+      writeFileSync(CLIENTS_FILE, JSON.stringify(clientsArray, null, 2), 'utf-8');
+    } catch (error) {
+      logger.error(`Failed to save OAuth clients to disk: ${error.message}`);
+    }
   }
 
   registerClient(metadata = {}) {
@@ -105,6 +141,7 @@ class OAuthProvider {
     };
 
     this.clients.set(client.client_id, client);
+    this.saveClients();
     logger.info(`🔑 OAuth client registered: ${client.client_id} (${client.client_name})`);
     return client;
   }
