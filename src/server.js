@@ -67,6 +67,9 @@ import { VoiceConversationAgent } from './agents/voice-conversation-agent.js';
 import { ConversationManager } from './core/conversation-manager.js';
 import { TelegramCommandCenter } from './telegram/command-center.js';
 import { RedisMailbox } from './core/mailbox-redis.js';
+import { IntentDetector } from './core/intent-detector.js';
+import { ActionBridge } from './core/action-bridge.js';
+import { collectDay1Health, formatDay1StatusText, isStatusRequest } from './core/health-status.js';
 
 class HustleBotServer {
   constructor() {
@@ -114,6 +117,9 @@ class HustleBotServer {
     // Phase 8 Features
     this.voiceConversationAgent = null;
     this.conversationManager = null;
+    // Action routing (Intent → Capability execution)
+    this.intentDetector = null;
+    this.actionBridge = null;
     // Diagnostics
     this.initializationErrors = [];
   }
@@ -599,6 +605,23 @@ class HustleBotServer {
         logger.warn('⚠️  Planner initialization failed, continuing:', error.message);
       }
 
+      // Initialize Intent Detector and Action Bridge for Telegram action routing
+      try {
+        logger.info('🔗 Initializing action routing (Intent Detector + Action Bridge)...');
+        this.intentDetector = new IntentDetector({
+          llm: this.llm,
+          registry: this.capabilityRegistry
+        });
+        this.actionBridge = new ActionBridge({
+          capabilityRegistry: this.capabilityRegistry
+        });
+        logger.info('✅ Action routing ready');
+      } catch (error) {
+        logger.warn('⚠️  Action routing initialization failed, continuing:', error.message);
+        this.intentDetector = null;
+        this.actionBridge = null;
+      }
+
       // Try to initialize Telegram bot (graceful failure)
       if (process.env.TELEGRAM_BOT_TOKEN) {
         try {
@@ -757,14 +780,18 @@ class HustleBotServer {
     });
 
     // Status endpoint
-    this.app.get('/api/status', (req, res) => {
+    this.app.get('/api/status', async (req, res) => {
       const providerStatus = this.providers ? this.providers.getProviderStatus() : null;
       const storageStatus = this.providers ? this.providers.getProviderStatus().storage.status : null;
       const contentStatus = this.contentFactory ? this.contentFactory.getStatus() : null;
+      const day1 = await collectDay1Health(this).catch((error) => ({
+        error: error.message
+      }));
 
       res.json({
         status: 'running',
         version: '2.0.0',
+        day1,
         database: this.db ? 'connected' : 'disconnected',
         llm: this.llm ? 'ready' : 'unavailable',
         telegram: this.bot ? 'connected' : 'disconnected',
@@ -2692,9 +2719,11 @@ class HustleBotServer {
     this.bot.command('status', async (ctx) => {
       try {
         logger.info(`/status command from user ${ctx.from.id}`);
-        await ctx.reply('✅ HustleBot v2 is running and ready!\n\nLaunch the command center with /menu');
+        const snapshot = await collectDay1Health(this);
+        await ctx.reply(formatDay1StatusText(snapshot));
       } catch (error) {
         logger.error('Error handling /status:', error);
+        await ctx.reply('Status check failed. Please try again.');
       }
     });
 
@@ -2744,42 +2773,103 @@ class HustleBotServer {
           logger.info('Sending transcription back...');
           await ctx.reply(`🎤 You said: "${text}"`);
 
-          // Try to get AI response (but don't fail if it doesn't work)
+          if (isStatusRequest(text)) {
+            const snapshot = await collectDay1Health(this);
+            const statusText = formatDay1StatusText(snapshot);
+            await ctx.reply(statusText);
+            try {
+              await ctx.sendChatAction('record_voice');
+              const speech = await this.voice.textToSpeech(statusText, {
+                voice: process.env.DEEPGRAM_TTS_VOICE || 'aura-asteria-en',
+                format: 'ogg'
+              });
+              await ctx.replyWithVoice({ source: speech.audioBuffer });
+            } catch (ttsError) {
+              logger.error('Status TTS failed (non-fatal):', ttsError.message);
+            }
+            return;
+          }
+
+          // Try to get AI response (with action routing if available)
           try {
-            if (this.llm) {
-              logger.info('Getting AI response...');
+            if (!this.llm) {
+              logger.warn('LLM not available');
+              return;
+            }
+
+            let responseText = null;
+
+            // STEP 1: Try action routing (Intent → Capability execution)
+            if (this.intentDetector && this.actionBridge) {
+              try {
+                logger.info('🔍 Detecting intent from transcribed voice message...');
+
+                // Detect intent from transcribed text
+                const intent = await this.intentDetector.detect(text);
+
+                // Try to execute action if capability was detected
+                if (intent.capabilityId) {
+                  logger.info(`📍 Voice intent maps to capability: ${intent.capabilityId}`);
+                  const actionResult = await this.actionBridge.execute(intent, {
+                    userId: ctx.from.id,
+                    vertical: null
+                  });
+
+                  if (actionResult.success) {
+                    logger.info(`✅ Voice action execution succeeded`);
+                    responseText = actionResult.conversationalResponse;
+                  } else {
+                    // Action was attempted but failed - return explicit failure (not fallback)
+                    logger.warn(`⚠️  Voice action failed: ${actionResult.error}`);
+                    responseText = actionResult.conversationalResponse;
+                  }
+                }
+
+                // Use intent fallback only if no action was attempted
+                if (!responseText && intent.fallback_response) {
+                  responseText = intent.fallback_response;
+                }
+              } catch (actionRoutingError) {
+                logger.error('Voice action routing error:', actionRoutingError.message);
+                // Fall through to LLM
+              }
+            }
+
+            // STEP 2: If no action response, use LLM
+            if (!responseText) {
+              logger.info('Getting AI response via LLM...');
               const response = await this.llm.complete(text, {
                 taskType: 'general',
                 maxTokens: 500
               });
-
+              responseText = response.content;
               logger.info(`✅ AI response ready: ${response.tokens.output} tokens`);
-              await ctx.reply(`🤖 AI: ${response.content}`);
+            }
 
-              // Speak the answer back as a Telegram voice note.
-              // Text already went out above, so a TTS failure is not fatal.
-              try {
-                await ctx.sendChatAction('record_voice');
-                logger.info('Generating spoken reply...');
+            // Send text response
+            await ctx.reply(`🤖 AI: ${responseText}`);
 
-                const speech = await this.voice.textToSpeech(response.content, {
-                  voice: process.env.DEEPGRAM_TTS_VOICE || 'aura-asteria-en',
-                  format: 'ogg'
+            // Speak the answer back as a Telegram voice note.
+            // Text already went out above, so a TTS failure is not fatal.
+            try {
+              await ctx.sendChatAction('record_voice');
+              logger.info('Generating spoken reply...');
+
+              const speech = await this.voice.textToSpeech(responseText, {
+                voice: process.env.DEEPGRAM_TTS_VOICE || 'aura-asteria-en',
+                format: 'ogg'
+              });
+
+              await ctx.replyWithVoice({ source: speech.audioBuffer });
+              logger.info(`✅ Spoken reply sent (${speech.size} bytes)`);
+
+              if (speech.truncated) {
+                await ctx.reply('_(spoken reply was shortened - full text above)_', {
+                  parse_mode: 'Markdown'
                 });
-
-                await ctx.replyWithVoice({ source: speech.audioBuffer });
-                logger.info(`✅ Spoken reply sent (${speech.size} bytes)`);
-
-                if (speech.truncated) {
-                  await ctx.reply('_(spoken reply was shortened - full text above)_', {
-                    parse_mode: 'Markdown'
-                  });
-                }
-              } catch (ttsError) {
-                logger.error('Text-to-speech failed (non-fatal):', ttsError.message);
               }
-            } else {
-              logger.warn('LLM not available');
+            } catch (ttsError) {
+              logger.error('Text-to-speech failed (non-fatal):', ttsError.message);
             }
           } catch (llmError) {
             logger.error('LLM error (non-fatal):', llmError.message);
@@ -2806,11 +2896,88 @@ class HustleBotServer {
         const userMessage = ctx.message.text;
         logger.info(`Message from user ${ctx.from.id}: ${userMessage}`);
 
+        if (isStatusRequest(userMessage)) {
+          await ctx.sendChatAction('typing');
+          const snapshot = await collectDay1Health(this);
+          await ctx.reply(formatDay1StatusText(snapshot));
+          return;
+        }
+
         // Show "typing" indicator
         await ctx.sendChatAction('typing');
 
-        // Try to get AI response
-        if (this.llm) {
+        // STEP 1: Try action routing (Intent → Capability execution)
+        if (this.intentDetector && this.actionBridge && this.llm) {
+          try {
+            logger.info('🔍 Detecting intent from user message...');
+
+            // Detect intent from user message
+            const intent = await this.intentDetector.detect(userMessage);
+
+            if (intent.error && intent.error !== 'EMPTY_MESSAGE') {
+              logger.debug(`Intent detection returned error: ${intent.error}`);
+            }
+
+            // Try to execute action if capability was detected
+            if (intent.capabilityId) {
+              logger.info(`📍 Intent maps to capability: ${intent.capabilityId}`);
+              const actionResult = await this.actionBridge.execute(intent, {
+                userId: ctx.from.id,
+                vertical: null
+              });
+
+              if (actionResult.success) {
+                logger.info(`✅ Action execution succeeded (executionId: ${actionResult.executionId})`);
+                await ctx.reply(actionResult.conversationalResponse);
+                return; // Stop processing, action succeeded
+              } else {
+                // Action was attempted but failed - return explicit failure
+                logger.warn(
+                  `⚠️  Action execution failed: ${actionResult.error} (executionId: ${actionResult.executionId})`
+                );
+                await ctx.reply(actionResult.conversationalResponse);
+                return; // Stop processing, return failure explicitly (not fallback)
+              }
+            } else {
+              logger.debug('No capability mapped for this intent, using conversational response');
+            }
+
+            // STEP 2: Fallback to conversational response (from intent detection or LLM)
+            // Only reached if no capability was selected in STEP 1
+            if (intent.fallback_response) {
+              await ctx.reply(intent.fallback_response);
+              return;
+            }
+
+            // STEP 3: If intent detection provided no response, use full LLM
+            logger.info('Using full LLM completion for conversational response');
+            const response = await this.llm.complete(userMessage, {
+              taskType: 'general',
+              maxTokens: 1000,
+              temperature: 0.7
+            });
+
+            logger.info(`AI response for user ${ctx.from.id}: ${response.tokens.input} in, ${response.tokens.output} out, $${response.cost.toFixed(4)} cost`);
+            await ctx.reply(response.content);
+          } catch (actionRoutingError) {
+            logger.error('Action routing error (falling back to LLM):', actionRoutingError.message);
+
+            // Fallback: just use LLM
+            try {
+              const response = await this.llm.complete(userMessage, {
+                taskType: 'general',
+                maxTokens: 1000,
+                temperature: 0.7
+              });
+              await ctx.reply(response.content);
+            } catch (llmError) {
+              logger.error('LLM fallback also failed:', llmError.message);
+              await ctx.reply('⚠️ I encountered an error. Please try again later.');
+            }
+          }
+        } else if (this.llm) {
+          // Action routing not available, use simple LLM
+          logger.info('Action routing not available, using direct LLM');
           try {
             const response = await this.llm.complete(userMessage, {
               taskType: 'general',

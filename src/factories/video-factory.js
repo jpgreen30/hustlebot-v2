@@ -17,8 +17,10 @@ class VideoFactory {
   constructor(config = {}) {
     this.db = config.db || null;
     this.llm = config.llm || null;
-    this.heygenApiKey = process.env.HEYGENAPI_KEY;
+    this.heygenApiKey = process.env.HEYGEN_API_KEY || process.env.HEYGENAPI_KEY;
     this.heygenEnabled = !!this.heygenApiKey;
+    this.lastProbe = null;
+    this.lastError = null;
 
     this.videos = new Map();
     this.scripts = new Map();
@@ -150,57 +152,246 @@ class VideoFactory {
   }
 
   /**
-   * Create video from script
+   * Create a video via the official HeyGen API.
+   *
+   * Accepts a scriptId string, a spoken script/topic string, or
+   * { script, topic, prompt }.
+   *
+   * Official contract (verified 2026-08):
+   *   POST https://api.heygen.com/v3/video-agents
+   *   Auth: X-Api-Key
+   *   Body: { prompt }
+   *   Response: { data: { session_id, status, video_id } }
+   *
+   * Never fabricates video IDs.
    */
-  async createVideo(scriptId) {
+  async createVideo(input) {
     try {
-      if (!this.scripts.has(scriptId)) {
-        throw new Error(`Script ${scriptId} not found`);
+      const resolved = this.resolveVideoInput(input);
+      if (resolved.error) {
+        return { error: resolved.error, status: 'failed', scriptId: resolved.scriptId || null };
       }
 
-      const script = this.scripts.get(scriptId);
-      logger.info(`🎥 Creating video from script: ${script.topic}`);
+      const { script, topic, scriptId } = resolved;
+      logger.info(`🎥 Creating video: ${topic}`);
 
-      if (!this.heygenEnabled) {
-        logger.warn('HeyGen not configured, returning mock video');
-        return this.getMockVideo(script);
+      if (!this.heygenEnabled || !this.heygenApiKey) {
+        logger.warn('HeyGen not configured');
+        return {
+          error: 'HeyGen API not configured',
+          status: 'unavailable',
+          scriptId: scriptId || null,
+          reason: 'HEYGEN_API_KEY not set in environment'
+        };
       }
 
-      // In production: call HeyGen API
-      // const response = await fetch('https://api.heygen.com/v1/generate', {
-      //   method: 'POST',
-      //   headers: { 'Authorization': `Bearer ${this.heygenApiKey}` },
-      //   body: JSON.stringify({ script: script.narrative })
-      // });
+      const prompt = this.buildHeyGenPrompt(script, topic);
+      logger.info('📤 Calling HeyGen v3 video-agents');
 
-      return this.getMockVideo(script);
+      const heygenResponse = await fetch('https://api.heygen.com/v3/video-agents', {
+        method: 'POST',
+        headers: {
+          'X-Api-Key': this.heygenApiKey,
+          Accept: 'application/json',
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          prompt,
+          title: topic || 'HustleBot video'
+        })
+      });
+
+      const videoData = await heygenResponse.json().catch(() => ({}));
+      if (!heygenResponse.ok) {
+        const message =
+          videoData?.error?.message ||
+          videoData?.message ||
+          videoData?.error ||
+          heygenResponse.statusText;
+        throw new Error(`HeyGen API error ${heygenResponse.status}: ${message}`);
+      }
+
+      const data = videoData.data || videoData;
+      const sessionId = data.session_id || data.sessionId || null;
+      let videoId = data.video_id || data.videoId || null;
+      if (videoId && String(videoId).startsWith('sess_')) {
+        videoId = null;
+      }
+
+      if (!videoId && !sessionId) {
+        throw new Error('HeyGen API response missing video_id/session_id - protocol violation');
+      }
+
+      const providerId = videoId || sessionId;
+      logger.info(`✅ HeyGen accepted request, id: ${providerId}`);
+
+      const video = {
+        id: providerId,
+        video_id: videoId,
+        session_id: sessionId,
+        scriptId: scriptId || null,
+        topic,
+        status: data.status || (videoId ? 'processing' : 'generating'),
+        duration: resolved.duration || null,
+        url: data.video_url || data.url || null,
+        thumbnail: data.thumbnail_url || null,
+        provider: 'heygen',
+        heygenJobId: videoId || sessionId,
+        createdAt: new Date().toISOString(),
+        timestamp: new Date()
+      };
+
+      this.videos.set(video.id, video);
+      return video;
     } catch (error) {
       logger.error(`Video creation failed: ${error.message}`);
-      return { error: error.message };
+      this.lastError = error.message;
+      return {
+        error: error.message,
+        status: 'failed',
+        scriptId: typeof input === 'string' ? input : input?.scriptId || null
+      };
     }
   }
 
-  /**
-   * Mock video data
-   */
-  getMockVideo(script) {
-    const video = {
-      id: `video-${Date.now()}`,
-      scriptId: script.id,
-      topic: script.topic,
-      status: 'processing',
-      duration: script.duration,
-      url: `https://example.com/videos/${script.id}.mp4`,
-      thumbnail: `https://images.unsplash.com/photo-1576593072268-4ad5282cfb5e?w=320`,
-      scenes: script.scenes.length,
-      quality: '1080p',
-      aspectRatios: ['16:9', '9:16', '1:1'],
-      estimatedCompletionTime: '24-48 hours',
-      timestamp: new Date()
-    };
+  resolveVideoInput(input) {
+    if (input == null || input === '') {
+      return { error: 'script or topic is required' };
+    }
 
-    this.videos.set(video.id, video);
-    return video;
+    if (typeof input === 'string') {
+      if (this.scripts.has(input)) {
+        const existing = this.scripts.get(input);
+        return {
+          script: existing.narrative,
+          topic: existing.topic,
+          scriptId: existing.id,
+          duration: existing.duration
+        };
+      }
+      return { script: input, topic: input.slice(0, 80), scriptId: null };
+    }
+
+    if (typeof input === 'object') {
+      if (input.scriptId && this.scripts.has(input.scriptId)) {
+        const existing = this.scripts.get(input.scriptId);
+        return {
+          script: input.script || existing.narrative,
+          topic: input.topic || existing.topic,
+          scriptId: existing.id,
+          duration: existing.duration
+        };
+      }
+      const script = input.script || input.prompt || input.text || input.topic;
+      if (!script) return { error: 'script or topic is required' };
+      return {
+        script,
+        topic: input.topic || String(script).slice(0, 80),
+        scriptId: input.scriptId || null
+      };
+    }
+
+    return { error: 'invalid video input' };
+  }
+
+  buildHeyGenPrompt(script, topic) {
+    const spoken = String(script || topic || 'HustleBot is online.').trim();
+    return `Create a short professional presenter video. The presenter looks at the camera and says, clearly and naturally: "${spoken.replace(/"/g, "'")}". Keep it under 15 seconds. No extra scenes.`;
+  }
+
+  async pollHeyGenSession(sessionId, { attempts = 3, delayMs = 2000 } = {}) {
+    for (let i = 0; i < attempts; i++) {
+      if (delayMs) await new Promise((r) => setTimeout(r, delayMs));
+      try {
+        const response = await fetch(`https://api.heygen.com/v3/video-agents/${sessionId}`, {
+          method: 'GET',
+          headers: {
+            'X-Api-Key': this.heygenApiKey,
+            Accept: 'application/json'
+          }
+        });
+        if (!response.ok) continue;
+        const body = await response.json().catch(() => ({}));
+        const data = body.data || body;
+        if (data.video_id || data.videoId) {
+          return { video_id: data.video_id || data.videoId, status: data.status || null };
+        }
+      } catch (error) {
+        logger.warn(`HeyGen session poll failed: ${error.message}`);
+      }
+    }
+    return { video_id: null, status: 'generating' };
+  }
+
+  async getVideoStatus(videoId) {
+    if (!this.heygenApiKey || !videoId) {
+      return { status: 'unavailable', error: 'HeyGen not configured or video id missing' };
+    }
+
+    const stored = this.videos.get(videoId);
+    if (stored?.session_id && !stored?.video_id) {
+      const polled = await this.pollHeyGenSession(stored.session_id, { attempts: 1, delayMs: 0 });
+      if (polled.video_id) stored.video_id = polled.video_id;
+    }
+
+    const id = stored?.video_id || videoId;
+    const response = await fetch(`https://api.heygen.com/v3/videos/${encodeURIComponent(id)}`, {
+      method: 'GET',
+      headers: {
+        'X-Api-Key': this.heygenApiKey,
+        Accept: 'application/json'
+      }
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      return {
+        status: 'failed',
+        error: body?.error?.message || body?.message || `HeyGen status HTTP ${response.status}`
+      };
+    }
+    const data = body.data || body;
+    if (stored) {
+      stored.status = data.status || stored.status;
+      stored.url = data.video_url || data.url || stored.url;
+    }
+    return {
+      video_id: data.id || data.video_id || id,
+      status: data.status || 'unknown',
+      url: data.video_url || data.url || null,
+      duration: data.duration || null
+    };
+  }
+
+  isReady() {
+    return Boolean(this.heygenEnabled && this.heygenApiKey);
+  }
+
+  async getHealth() {
+    if (!this.heygenApiKey) {
+      return { state: 'MISCONFIGURED', detail: 'HEYGEN_API_KEY not set' };
+    }
+    try {
+      const response = await fetch('https://api.heygen.com/v3/users/me', {
+        method: 'GET',
+        headers: {
+          'X-Api-Key': this.heygenApiKey,
+          Accept: 'application/json'
+        }
+      });
+      if (response.status === 401 || response.status === 403) {
+        this.lastProbe = { state: 'MISCONFIGURED', detail: `HeyGen auth failed (${response.status})` };
+        return this.lastProbe;
+      }
+      if (!response.ok) {
+        this.lastProbe = { state: 'UNAVAILABLE', detail: `HeyGen users/me HTTP ${response.status}` };
+        return this.lastProbe;
+      }
+      this.lastProbe = { state: 'HEALTHY', detail: 'users/me ok' };
+      return this.lastProbe;
+    } catch (error) {
+      this.lastProbe = { state: 'UNAVAILABLE', detail: error.message };
+      return this.lastProbe;
+    }
   }
 
   /**
