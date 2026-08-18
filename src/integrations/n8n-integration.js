@@ -29,8 +29,14 @@ class N8NIntegration {
    * Register default workflows from environment or config
    */
   registerDefaultWorkflows(customWorkflows = {}) {
-    // Merge environment-based workflows with custom config
-    const envWorkflow = process.env.N8N_WORKFLOWS ? JSON.parse(process.env.N8N_WORKFLOWS) : {};
+    let envWorkflow = {};
+    if (process.env.N8N_WORKFLOWS) {
+      try {
+        envWorkflow = JSON.parse(process.env.N8N_WORKFLOWS);
+      } catch (error) {
+        logger.error(`N8N_WORKFLOWS is not valid JSON: ${error.message}`);
+      }
+    }
     const all = { ...envWorkflow, ...customWorkflows };
 
     for (const [alias, config] of Object.entries(all)) {
@@ -43,9 +49,20 @@ class N8NIntegration {
       }
     }
 
+    // Dedicated test workflow, then fall back to the generic webhook URL.
+    if (process.env.N8N_TEST_WEBHOOK_URL && !this.workflows.has('test')) {
+      this.workflows.set('test', { url: process.env.N8N_TEST_WEBHOOK_URL });
+    } else if (this.webhookUrl && !this.workflows.has('test')) {
+      this.workflows.set('test', { url: this.webhookUrl });
+    }
+
     if (this.workflows.size > 0) {
       logger.info(`🔗 n8n workflow registry loaded: ${Array.from(this.workflows.keys()).join(', ')}`);
     }
+  }
+
+  isReady() {
+    return Boolean(this.n8nEnabled || this.workflows.size > 0);
   }
 
   async initialize() {
@@ -250,10 +267,24 @@ class N8NIntegration {
 
       this.webhookHistory.push(record);
 
+      let providerBody = null;
+      try {
+        providerBody = await response.json();
+      } catch {
+        providerBody = null;
+      }
+      const providerExecutionId =
+        providerBody?.executionId ||
+        providerBody?.id ||
+        providerBody?.workflowRunId ||
+        null;
+
       return {
         alias,
         status: 'executed',
-        executionId: record.id,
+        executionId: providerExecutionId || record.id,
+        providerExecutionId,
+        provider: 'n8n',
         timestamp: new Date()
       };
     } catch (error) {
@@ -437,9 +468,8 @@ class N8NIntegration {
    */
   getMockResponse(eventType) {
     return {
-      eventId: `webhook-${Date.now()}`,
       event: eventType,
-      status: 'mock',
+      status: 'unavailable',
       reason: 'N8N_WEBHOOK_URL not configured',
       timestamp: new Date()
     };
@@ -459,23 +489,28 @@ class N8NIntegration {
       }
 
       logger.info('🔗 Testing n8n webhook connection...');
-
-      // In production: test the webhook
-      // const response = await fetch(this.webhookUrl, {
-      //   method: 'POST',
-      //   headers: { 'Content-Type': 'application/json' },
-      //   body: JSON.stringify({
-      //     test: true,
-      //     timestamp: new Date().toISOString()
-      //   }),
-      //   timeout: 5000
-      // });
-
-      return {
-        connected: true,
-        webhookUrl: this.webhookUrl,
-        timestamp: new Date()
-      };
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 5000);
+      try {
+        const response = await fetch(this.webhookUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            event: 'health.ping',
+            timestamp: new Date().toISOString(),
+            source: 'hustlebot-v2'
+          }),
+          signal: controller.signal
+        });
+        clearTimeout(timeoutId);
+        return {
+          connected: response.ok,
+          httpStatus: response.status,
+          timestamp: new Date()
+        };
+      } finally {
+        clearTimeout(timeoutId);
+      }
     } catch (error) {
       logger.error(`Connection test failed: ${error.message}`);
       return {
@@ -494,13 +529,30 @@ class N8NIntegration {
       initialized: true,
       n8nEnabled: this.n8nEnabled,
       webhookUrl: this.n8nEnabled ? '***configured***' : 'not set',
+      registeredWorkflows: Array.from(this.workflows.keys()),
       totalEvents: this.webhookHistory.length,
       recentEvents: this.webhookHistory.slice(-5).map(e => ({
-        event: e.eventType,
+        event: e.eventType || e.alias,
         status: e.status,
         timestamp: e.timestamp
       })),
       timestamp: new Date()
+    };
+  }
+
+  async getHealth() {
+    if (!this.n8nEnabled && this.workflows.size === 0) {
+      return { state: 'MISCONFIGURED', detail: 'N8N_WEBHOOK_URL not set' };
+    }
+    const delivered = this.webhookHistory.filter((e) => e.status === 'delivered' || e.status === 'executed');
+    if (delivered.length > 0) {
+      return { state: 'HEALTHY', detail: `${delivered.length} webhook(s) delivered` };
+    }
+    return {
+      state: 'UNVERIFIED',
+      detail: this.n8nEnabled
+        ? 'webhook configured; no successful execution yet'
+        : `${this.workflows.size} workflow alias(es) registered; no successful execution yet`
     };
   }
 }

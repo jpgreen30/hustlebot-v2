@@ -37,11 +37,19 @@ export function registerPlatformCapabilities(registry, services = {}) {
     leadFactory,
     knowledgeFactory,
     analyticsEngine,
-    voice
+    voice,
+    n8nIntegration
   } = services;
 
   const present = (service, method) =>
     () => Boolean(service && typeof service[method] === 'function');
+
+  const ready = (service, method) =>
+    () => {
+      if (!service || typeof service[method] !== 'function') return false;
+      if (typeof service.isReady === 'function') return service.isReady() !== false;
+      return true;
+    };
 
   const descriptors = [
     // ---- Data acquisition -------------------------------------------------
@@ -178,7 +186,7 @@ export function registerPlatformCapabilities(registry, services = {}) {
       requiresApproval: true,
       failureModes: ['no answer', 'invalid number', 'outside calling window', 'consent missing'],
       handler: (input) => retellIntegration.makeOutboundCall(input),
-      isAvailable: present(retellIntegration, 'makeOutboundCall')
+      isAvailable: ready(retellIntegration, 'makeOutboundCall')
     },
     {
       capabilityId: 'social.publish',
@@ -253,7 +261,11 @@ export function registerPlatformCapabilities(registry, services = {}) {
       permissions: ['llm.invoke', 'media.render'],
       inputs: {
         type: 'object',
-        properties: { script: { type: 'string' }, topic: { type: 'string' } }
+        properties: {
+          script: { type: 'string', description: 'Spoken script or prompt for the video' },
+          topic: { type: 'string', description: 'Video topic' },
+          prompt: { type: 'string', description: 'Alternate prompt field' }
+        }
       },
       expectedCost: 0.5,
       expectedLatencyMs: 120000,
@@ -261,7 +273,32 @@ export function registerPlatformCapabilities(registry, services = {}) {
       fallbackProvider: 'shotstack',
       failureModes: ['render failure', 'avatar provider down', 'asset missing'],
       handler: (input) => videoFactory.createVideo(input),
-      isAvailable: present(videoFactory, 'createVideo')
+      isAvailable: ready(videoFactory, 'createVideo')
+    },
+    {
+      capabilityId: 'workflow.execute',
+      name: 'Execute a registered n8n workflow',
+      description: 'Run a named n8n webhook workflow such as the Day-1 test workflow',
+      provider: 'n8n',
+      mcpTool: 'invoke_capability',
+      permissions: ['external.send'],
+      inputs: {
+        type: 'object',
+        properties: {
+          alias: { type: 'string', description: 'Registered workflow alias, e.g. test' },
+          workflow: { type: 'string', description: 'Alias synonym' },
+          payload: { type: 'object', description: 'Optional workflow payload' }
+        }
+      },
+      expectedCost: 0,
+      expectedLatencyMs: 4000,
+      reliability: 0.94,
+      failureModes: ['workflow not registered', 'webhook timeout', 'n8n unavailable'],
+      handler: (input) => {
+        const alias = input.alias || input.workflow || input.name || 'test';
+        return n8nIntegration.execute(alias, input.payload || input);
+      },
+      isAvailable: ready(n8nIntegration, 'execute')
     },
     {
       capabilityId: 'site.build',

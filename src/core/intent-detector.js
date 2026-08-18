@@ -42,6 +42,9 @@ Rules:
 - confidence should reflect how sure you are of the match
 - Only include parameters that are in the user message or clearly inferable
 - If capabilityId is null, provide a helpful conversational response
+- "run the test workflow" / "run test workflow" maps to workflow.execute with parameters.alias="test"
+- "create a video saying X" maps to video.generate with parameters.script set to X
+- "call +1..." maps to voice.call with phoneNumber and script
 - Respond ONLY with the JSON object, no markdown or explanation`;
 
 class IntentDetector {

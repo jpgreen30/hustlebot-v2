@@ -69,6 +69,7 @@ import { TelegramCommandCenter } from './telegram/command-center.js';
 import { RedisMailbox } from './core/mailbox-redis.js';
 import { IntentDetector } from './core/intent-detector.js';
 import { ActionBridge } from './core/action-bridge.js';
+import { collectDay1Health, formatDay1StatusText, isStatusRequest } from './core/health-status.js';
 
 class HustleBotServer {
   constructor() {
@@ -779,14 +780,18 @@ class HustleBotServer {
     });
 
     // Status endpoint
-    this.app.get('/api/status', (req, res) => {
+    this.app.get('/api/status', async (req, res) => {
       const providerStatus = this.providers ? this.providers.getProviderStatus() : null;
       const storageStatus = this.providers ? this.providers.getProviderStatus().storage.status : null;
       const contentStatus = this.contentFactory ? this.contentFactory.getStatus() : null;
+      const day1 = await collectDay1Health(this).catch((error) => ({
+        error: error.message
+      }));
 
       res.json({
         status: 'running',
         version: '2.0.0',
+        day1,
         database: this.db ? 'connected' : 'disconnected',
         llm: this.llm ? 'ready' : 'unavailable',
         telegram: this.bot ? 'connected' : 'disconnected',
@@ -2714,9 +2719,11 @@ class HustleBotServer {
     this.bot.command('status', async (ctx) => {
       try {
         logger.info(`/status command from user ${ctx.from.id}`);
-        await ctx.reply('✅ HustleBot v2 is running and ready!\n\nLaunch the command center with /menu');
+        const snapshot = await collectDay1Health(this);
+        await ctx.reply(formatDay1StatusText(snapshot));
       } catch (error) {
         logger.error('Error handling /status:', error);
+        await ctx.reply('Status check failed. Please try again.');
       }
     });
 
@@ -2765,6 +2772,23 @@ class HustleBotServer {
 
           logger.info('Sending transcription back...');
           await ctx.reply(`🎤 You said: "${text}"`);
+
+          if (isStatusRequest(text)) {
+            const snapshot = await collectDay1Health(this);
+            const statusText = formatDay1StatusText(snapshot);
+            await ctx.reply(statusText);
+            try {
+              await ctx.sendChatAction('record_voice');
+              const speech = await this.voice.textToSpeech(statusText, {
+                voice: process.env.DEEPGRAM_TTS_VOICE || 'aura-asteria-en',
+                format: 'ogg'
+              });
+              await ctx.replyWithVoice({ source: speech.audioBuffer });
+            } catch (ttsError) {
+              logger.error('Status TTS failed (non-fatal):', ttsError.message);
+            }
+            return;
+          }
 
           // Try to get AI response (with action routing if available)
           try {
@@ -2871,6 +2895,13 @@ class HustleBotServer {
 
         const userMessage = ctx.message.text;
         logger.info(`Message from user ${ctx.from.id}: ${userMessage}`);
+
+        if (isStatusRequest(userMessage)) {
+          await ctx.sendChatAction('typing');
+          const snapshot = await collectDay1Health(this);
+          await ctx.reply(formatDay1StatusText(snapshot));
+          return;
+        }
 
         // Show "typing" indicator
         await ctx.sendChatAction('typing');

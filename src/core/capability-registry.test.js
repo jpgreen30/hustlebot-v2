@@ -256,7 +256,7 @@ describe('platform capability bindings', () => {
     registerPlatformCapabilities(r, {}); // nothing wired up
 
     for (const id of ['web.scrape', 'lead.enrich', 'lead.score', 'lead.route', 'email.send',
-      'voice.call', 'video.generate', 'social.publish', 'site.build', 'site.deploy',
+      'voice.call', 'video.generate', 'workflow.execute', 'social.publish', 'site.build', 'site.deploy',
       'payment.checkout', 'analytics.query']) {
       assert.ok(r.has(id), `spec capability "${id}" should be registered`);
     }

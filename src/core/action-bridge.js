@@ -3,55 +3,63 @@
  *
  * Connects natural-language intent detection to capability execution.
  *
- * Takes output from IntentDetector and:
- * 1. Validates capability exists and is available
- * 2. Invokes capability through registry
- * 3. Formats result for Telegram or conversational fallback
- * 4. Tracks execution for observability
- *
  * Pattern:
  *   intent → validate → invoke → format → return
+ *
+ * Provider failures remain failures. Conversational fallback is used only
+ * when no capability was selected.
  */
 
 import logger from '../utils/logger.js';
 import { v4 as uuidv4 } from 'uuid';
+
+const FAILURE_STATUSES = new Set(['failed', 'unavailable', 'misconfigured', 'error']);
+const MIN_CONFIDENCE = 0.55;
 
 class ActionBridge {
   constructor({ registry, capabilityRegistry } = {}) {
     this.registry = capabilityRegistry || registry;
   }
 
-  /**
-   * Execute an action based on detected intent
-   *
-   * @param {object} intent - output from IntentDetector.detect()
-   * @returns {object} { success, actionResult, conversationalResponse, executionId, error? }
-   */
   async execute(intent, options = {}) {
     const executionId = uuidv4().substring(0, 8);
     const { userId = 'unknown', vertical = null } = options;
 
     try {
-      // If no capability was detected, return conversational response
-      if (!intent.capabilityId) {
+      if (!intent?.capabilityId) {
         logger.info(
           `[${executionId}] No capability detected, using conversational fallback`
         );
         return {
           success: true,
           actionResult: null,
-          conversationalResponse: intent.fallback_response,
+          conversationalResponse: intent?.fallback_response || null,
+          executionId,
+          source: 'conversational'
+        };
+      }
+
+      if (Number(intent.confidence) < MIN_CONFIDENCE) {
+        logger.info(
+          `[${executionId}] Confidence ${intent.confidence} below ${MIN_CONFIDENCE}, not executing ${intent.capabilityId}`
+        );
+        return {
+          success: true,
+          actionResult: null,
+          conversationalResponse:
+            intent.fallback_response ||
+            'I was not confident enough to run that action. Please rephrase.',
           executionId,
           source: 'conversational'
         };
       }
 
       const capabilityId = intent.capabilityId;
+      const input = this.normalizeParameters(capabilityId, intent.parameters || {});
       logger.info(
         `[${executionId}] Executing capability: ${capabilityId} (user: ${userId}, vertical: ${vertical})`
       );
 
-      // Validate capability exists
       if (!this.registry.has(capabilityId)) {
         logger.warn(`[${executionId}] Capability not registered: ${capabilityId}`);
         return {
@@ -64,7 +72,6 @@ class ActionBridge {
         };
       }
 
-      // Check availability
       const resolved = this.registry.resolve(capabilityId, { vertical });
       if (!resolved || resolved.length === 0) {
         logger.warn(
@@ -80,10 +87,7 @@ class ActionBridge {
         };
       }
 
-      // Prepare input, validate against capability schema
-      const input = intent.parameters || {};
       const provider = resolved[0];
-
       const validationErrors = this.validateInput(provider.inputs, input);
       if (validationErrors.length > 0) {
         logger.warn(`[${executionId}] Input validation failed: ${validationErrors.join('; ')}`);
@@ -97,13 +101,17 @@ class ActionBridge {
         };
       }
 
-      // Invoke capability
       logger.info(`[${executionId}] Invoking ${capabilityId} with input keys: ${Object.keys(input).join(',')}`);
 
       const startTime = Date.now();
-      let actionResult;
+      let invocation;
       try {
-        actionResult = await this.registry.invoke(capabilityId, input, { vertical });
+        invocation = await this.registry.invoke(capabilityId, input, {
+          vertical,
+          actor: `telegram:${userId}`,
+          jobId: executionId,
+          bypassPermissions: true
+        });
       } catch (invokeError) {
         const duration = Date.now() - startTime;
         logger.error(
@@ -123,15 +131,27 @@ class ActionBridge {
       }
 
       const duration = Date.now() - startTime;
+      const payload = invocation?.result ?? invocation;
+      const providerFailure = this.detectProviderFailure(payload);
+      if (providerFailure) {
+        logger.warn(`[${executionId}] Provider returned failure: ${providerFailure}`);
+        return {
+          success: false,
+          actionResult: payload,
+          conversationalResponse: this.formatFailure(capabilityId, payload, providerFailure),
+          executionId,
+          duration,
+          error: 'PROVIDER_FAILED',
+          executionError: providerFailure,
+          source: 'action_bridge'
+        };
+      }
+
       logger.info(`[${executionId}] Capability succeeded in ${duration}ms`);
-
-      // Format result for response
-      const conversationalResponse = this.formatActionResult(capabilityId, actionResult);
-
       return {
         success: true,
-        actionResult,
-        conversationalResponse,
+        actionResult: payload,
+        conversationalResponse: this.formatActionResult(capabilityId, payload),
         executionId,
         duration,
         source: 'action_bridge'
@@ -150,15 +170,38 @@ class ActionBridge {
     }
   }
 
-  /**
-   * Validate input against capability input schema
-   * Returns array of validation errors (empty if valid)
-   */
+  normalizeParameters(capabilityId, parameters) {
+    const input = { ...(parameters || {}) };
+    if (capabilityId === 'voice.call') {
+      input.phoneNumber = input.phoneNumber || input.phone_number || input.phone || input.to || input.number;
+      input.script = input.script || input.message || input.text || input.what || input.purpose;
+    }
+    if (capabilityId === 'video.generate') {
+      input.script = input.script || input.prompt || input.text || input.topic || input.message;
+      input.topic = input.topic || input.title || input.script;
+    }
+    if (capabilityId === 'workflow.execute') {
+      input.alias = input.alias || input.workflow || input.name || input.workflowId;
+      if (!input.alias) input.alias = 'test';
+    }
+    return input;
+  }
+
+  detectProviderFailure(payload) {
+    if (!payload || typeof payload !== 'object') return null;
+    if (payload.error && typeof payload.error === 'string' && payload.error.trim()) {
+      return payload.error;
+    }
+    if (FAILURE_STATUSES.has(String(payload.status || '').toLowerCase())) {
+      return payload.reason || payload.message || payload.status;
+    }
+    return null;
+  }
+
   validateInput(schema, input) {
     if (!schema || typeof schema !== 'object') return [];
 
     const errors = [];
-    const props = schema.properties || {};
     const required = schema.required || [];
 
     for (const key of required) {
@@ -170,12 +213,14 @@ class ActionBridge {
     return errors;
   }
 
-  /**
-   * Format capability result into human-readable text for Telegram
-   */
+  formatFailure(capabilityId, payload, detail) {
+    const id = payload?.callId || payload?.video_id || payload?.session_id || payload?.executionId;
+    const idBit = id ? ` Provider id: ${id}.` : '';
+    return `Action failed (${capabilityId}): ${detail}.${idBit}`;
+  }
+
   formatActionResult(capabilityId, result) {
     if (!result) return 'Action completed.';
-
     if (typeof result === 'string') return result;
     if (typeof result === 'number') return `Result: ${result}`;
     if (typeof result === 'boolean') return `Success: ${result}`;
@@ -186,39 +231,33 @@ class ActionBridge {
     }
 
     if (typeof result === 'object') {
-      // Return a summary of the most important fields
       return this.summarizeResult(result);
     }
 
     return String(result);
   }
 
-  /**
-   * Summarize a single result object (e.g., lead, content, video)
-   */
   summarizeResult(obj) {
     if (!obj || typeof obj !== 'object') return String(obj);
 
-    // Extract key fields depending on object type
     const summary = [];
-
-    // Common fields
-    const keyFields = ['id', 'name', 'email', 'title', 'status', 'result', 'message'];
+    const keyFields = [
+      'callId', 'video_id', 'session_id', 'executionId', 'providerExecutionId',
+      'id', 'alias', 'status', 'url', 'name', 'title', 'message', 'result'
+    ];
     for (const field of keyFields) {
-      if (obj[field]) {
-        summary.push(`${field}: ${obj[field]}`);
-        if (summary.length >= 2) break;
+      const value = obj[field];
+      if (value && typeof value !== 'object') {
+        summary.push(`${field}: ${value}`);
+        if (summary.length >= 4) break;
       }
     }
 
     if (summary.length === 0) {
-      // If no key fields, just show object length or first entry
       const keys = Object.keys(obj).slice(0, 2);
       for (const key of keys) {
         const val = obj[key];
-        if (val && typeof val !== 'object') {
-          summary.push(`${key}: ${val}`);
-        }
+        if (val && typeof val !== 'object') summary.push(`${key}: ${val}`);
       }
     }
 
@@ -226,4 +265,4 @@ class ActionBridge {
   }
 }
 
-export { ActionBridge };
+export { ActionBridge, MIN_CONFIDENCE };
