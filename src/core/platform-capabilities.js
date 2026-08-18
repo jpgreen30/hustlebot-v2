@@ -163,8 +163,13 @@ export function registerPlatformCapabilities(registry, services = {}) {
       permissions: ['external.send', 'telephony'],
       inputs: {
         type: 'object',
-        properties: { phoneNumber: { type: 'string' }, agentId: { type: 'string' } },
-        required: ['phoneNumber']
+        properties: {
+          phoneNumber: { type: 'string', description: 'Phone number to call' },
+          script: { type: 'string', description: 'What the agent should say' },
+          name: { type: 'string', description: 'Name of the prospect (optional)' },
+          purpose: { type: 'string', description: 'Purpose of the call (optional)' }
+        },
+        required: ['phoneNumber', 'script']
       },
       expectedCost: 0.09,
       expectedLatencyMs: 3000,

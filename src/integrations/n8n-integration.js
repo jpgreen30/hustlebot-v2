@@ -19,6 +19,33 @@ class N8NIntegration {
     this.retryAttempts = 3;
     this.retryDelay = 1000;
     this.webhookHistory = [];
+
+    // Workflow registry: alias → webhook URL/configuration
+    this.workflows = new Map();
+    this.registerDefaultWorkflows(config.workflows || {});
+  }
+
+  /**
+   * Register default workflows from environment or config
+   */
+  registerDefaultWorkflows(customWorkflows = {}) {
+    // Merge environment-based workflows with custom config
+    const envWorkflow = process.env.N8N_WORKFLOWS ? JSON.parse(process.env.N8N_WORKFLOWS) : {};
+    const all = { ...envWorkflow, ...customWorkflows };
+
+    for (const [alias, config] of Object.entries(all)) {
+      if (typeof config === 'string') {
+        // Simple URL string
+        this.workflows.set(alias, { url: config });
+      } else if (typeof config === 'object' && config.url) {
+        // Full config object
+        this.workflows.set(alias, config);
+      }
+    }
+
+    if (this.workflows.size > 0) {
+      logger.info(`🔗 n8n workflow registry loaded: ${Array.from(this.workflows.keys()).join(', ')}`);
+    }
   }
 
   async initialize() {
@@ -36,10 +63,15 @@ class N8NIntegration {
     try {
       if (!this.n8nEnabled) {
         logger.warn(`Event not sent to n8n (not configured): ${eventType}`);
-        return this.getMockResponse(eventType);
+        return {
+          event: eventType,
+          status: 'unavailable',
+          reason: 'N8N_WEBHOOK_URL not configured',
+          timestamp: new Date()
+        };
       }
 
-      logger.info(`🔗 Sending ${eventType} event to n8n`);
+      logger.info(`🔗 Sending ${eventType} event to n8n webhook`);
 
       const payload = {
         event: eventType,
@@ -48,33 +80,65 @@ class N8NIntegration {
         source: 'hustlebot-v2'
       };
 
-      // In production: send to n8n webhook
-      // let response;
-      // let lastError;
-      // for (let attempt = 0; attempt < this.retryAttempts; attempt++) {
-      //   try {
-      //     response = await fetch(this.webhookUrl, {
-      //       method: 'POST',
-      //       headers: { 'Content-Type': 'application/json' },
-      //       body: JSON.stringify(payload),
-      //       timeout: 10000
-      //     });
-      //     if (response.ok) break;
-      //     throw new Error(`HTTP ${response.status}`);
-      //   } catch (error) {
-      //     lastError = error;
-      //     if (attempt < this.retryAttempts - 1) {
-      //       await new Promise(r => setTimeout(r, this.retryDelay * Math.pow(2, attempt)));
-      //     }
-      //   }
-      // }
+      // Send to n8n webhook with retry logic and timeout
+      let response;
+      let lastError;
+      const timeoutMs = 10000;
+
+      for (let attempt = 0; attempt < this.retryAttempts; attempt++) {
+        try {
+          logger.debug(`n8n webhook attempt ${attempt + 1}/${this.retryAttempts}`);
+
+          // Use AbortController for timeout support
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+          try {
+            response = await fetch(this.webhookUrl, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(payload),
+              signal: controller.signal
+            });
+
+            clearTimeout(timeoutId);
+
+            if (response.ok) {
+              logger.info(`✅ n8n webhook accepted event: ${eventType}`);
+              break;
+            }
+
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+          } catch (fetchError) {
+            clearTimeout(timeoutId);
+            throw fetchError;
+          }
+        } catch (error) {
+          lastError = error;
+          const errorMsg = error.name === 'AbortError'
+            ? `timeout after ${timeoutMs}ms`
+            : error.message;
+          logger.warn(`n8n webhook attempt ${attempt + 1} failed: ${errorMsg}`);
+
+          if (attempt < this.retryAttempts - 1) {
+            const delay = this.retryDelay * Math.pow(2, attempt);
+            logger.debug(`Retrying in ${delay}ms...`);
+            await new Promise((r) => setTimeout(r, delay));
+          }
+        }
+      }
+
+      if (!response || !response.ok) {
+        throw lastError || new Error('n8n webhook failed after retries');
+      }
 
       const record = {
         id: `webhook-${Date.now()}`,
         eventType,
         status: 'delivered',
         timestamp: new Date(),
-        dataSize: JSON.stringify(data).length
+        dataSize: JSON.stringify(data).length,
+        attempts: this.retryAttempts
       };
 
       this.webhookHistory.push(record);
@@ -86,9 +150,116 @@ class N8NIntegration {
         timestamp: new Date()
       };
     } catch (error) {
-      logger.error(`Event sending failed: ${error.message}`);
+      logger.error(`n8n event sending failed: ${error.message}`);
       return {
         event: eventType,
+        status: 'failed',
+        error: error.message,
+        timestamp: new Date()
+      };
+    }
+  }
+
+  /**
+   * Execute a specific n8n workflow by alias
+   * Maps workflow alias to registered webhook URL and executes
+   */
+  async execute(alias, payload = {}) {
+    try {
+      const workflow = this.workflows.get(alias);
+
+      if (!workflow) {
+        logger.warn(`Workflow not registered: ${alias}`);
+        return {
+          alias,
+          status: 'failed',
+          error: `Workflow '${alias}' not registered`,
+          availableWorkflows: Array.from(this.workflows.keys()),
+          timestamp: new Date()
+        };
+      }
+
+      const workflowUrl = workflow.url;
+      logger.info(`🔄 Executing workflow '${alias}' at ${workflowUrl}`);
+
+      const request = {
+        alias,
+        payload,
+        timestamp: new Date().toISOString(),
+        source: 'hustlebot-v2'
+      };
+
+      // Use same retry + timeout logic as sendEvent
+      let response;
+      let lastError;
+      const timeoutMs = workflow.timeout || 10000;
+
+      for (let attempt = 0; attempt < this.retryAttempts; attempt++) {
+        try {
+          logger.debug(`Workflow attempt ${attempt + 1}/${this.retryAttempts}`);
+
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+          try {
+            response = await fetch(workflowUrl, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(request),
+              signal: controller.signal
+            });
+
+            clearTimeout(timeoutId);
+
+            if (response.ok) {
+              logger.info(`✅ Workflow '${alias}' executed successfully`);
+              break;
+            }
+
+            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+          } catch (fetchError) {
+            clearTimeout(timeoutId);
+            throw fetchError;
+          }
+        } catch (error) {
+          lastError = error;
+          const errorMsg = error.name === 'AbortError'
+            ? `timeout after ${timeoutMs}ms`
+            : error.message;
+          logger.warn(`Workflow attempt ${attempt + 1} failed: ${errorMsg}`);
+
+          if (attempt < this.retryAttempts - 1) {
+            const delay = this.retryDelay * Math.pow(2, attempt);
+            logger.debug(`Retrying in ${delay}ms...`);
+            await new Promise((r) => setTimeout(r, delay));
+          }
+        }
+      }
+
+      if (!response || !response.ok) {
+        throw lastError || new Error('Workflow execution failed after retries');
+      }
+
+      const record = {
+        id: `workflow-${Date.now()}`,
+        alias,
+        status: 'executed',
+        timestamp: new Date(),
+        payloadSize: JSON.stringify(payload).length
+      };
+
+      this.webhookHistory.push(record);
+
+      return {
+        alias,
+        status: 'executed',
+        executionId: record.id,
+        timestamp: new Date()
+      };
+    } catch (error) {
+      logger.error(`Workflow execution failed: ${error.message}`);
+      return {
+        alias,
         status: 'failed',
         error: error.message,
         timestamp: new Date()

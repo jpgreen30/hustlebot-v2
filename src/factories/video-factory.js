@@ -151,6 +151,7 @@ class VideoFactory {
 
   /**
    * Create video from script
+   * Calls real HeyGen API if configured, otherwise returns unavailable status
    */
   async createVideo(scriptId) {
     try {
@@ -162,21 +163,84 @@ class VideoFactory {
       logger.info(`🎥 Creating video from script: ${script.topic}`);
 
       if (!this.heygenEnabled) {
-        logger.warn('HeyGen not configured, returning mock video');
-        return this.getMockVideo(script);
+        logger.warn('HeyGen not configured');
+        return {
+          error: 'HeyGen API not configured',
+          status: 'unavailable',
+          scriptId,
+          reason: 'HEYGENAPI_KEY not set in environment'
+        };
       }
 
-      // In production: call HeyGen API
-      // const response = await fetch('https://api.heygen.com/v1/generate', {
-      //   method: 'POST',
-      //   headers: { 'Authorization': `Bearer ${this.heygenApiKey}` },
-      //   body: JSON.stringify({ script: script.narrative })
-      // });
+      // Call HeyGen API to generate video
+      logger.info(`📤 Calling HeyGen API to generate video from script: ${scriptId}`);
 
-      return this.getMockVideo(script);
+      try {
+        const heygenResponse = await fetch('https://api.heygen.com/v1/video_generate', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${this.heygenApiKey}`,
+            'Content-Type': 'application/json',
+            'X-Requested-With': 'XMLHttpRequest'
+          },
+          body: JSON.stringify({
+            script: script.narrative,
+            title: script.topic,
+            persona: {
+              type: 'avatar',
+              avatar_style: 'professional'
+            },
+            aspect_ratio: '16:9'
+          })
+        });
+
+        if (!heygenResponse.ok) {
+          const error = await heygenResponse.json().catch(() => ({}));
+          throw new Error(
+            `HeyGen API error ${heygenResponse.status}: ${
+              error.message || heygenResponse.statusText
+            }`
+          );
+        }
+
+        const videoData = await heygenResponse.json();
+
+        // Validate provider response contains required fields
+        if (!videoData.video_id) {
+          throw new Error('HeyGen API response missing video_id - protocol violation');
+        }
+
+        logger.info(`✅ HeyGen API accepted request, video_id: ${videoData.video_id}`);
+
+        // Store generated video info
+        const video = {
+          id: videoData.video_id,
+          scriptId: script.id,
+          topic: script.topic,
+          status: videoData.status || 'processing',
+          duration: script.duration,
+          url: videoData.video_url || null,
+          thumbnail: videoData.thumbnail_url || null,
+          scenes: script.scenes.length,
+          quality: '1080p',
+          heygenJobId: videoData.job_id || videoData.video_id,
+          createdAt: new Date().toISOString(),
+          timestamp: new Date()
+        };
+
+        this.videos.set(video.id, video);
+        return video;
+      } catch (apiError) {
+        logger.error(`HeyGen API call failed: ${apiError.message}`);
+        throw apiError;
+      }
     } catch (error) {
       logger.error(`Video creation failed: ${error.message}`);
-      return { error: error.message };
+      return {
+        error: error.message,
+        status: 'failed',
+        scriptId
+      };
     }
   }
 

@@ -2795,12 +2795,13 @@ class HustleBotServer {
                     logger.info(`✅ Voice action execution succeeded`);
                     responseText = actionResult.conversationalResponse;
                   } else {
+                    // Action was attempted but failed - return explicit failure (not fallback)
                     logger.warn(`⚠️  Voice action failed: ${actionResult.error}`);
-                    // Fall through to conversational response
+                    responseText = actionResult.conversationalResponse;
                   }
                 }
 
-                // Use intent fallback if action didn't succeed
+                // Use intent fallback only if no action was attempted
                 if (!responseText && intent.fallback_response) {
                   responseText = intent.fallback_response;
                 }
@@ -2899,16 +2900,19 @@ class HustleBotServer {
                 await ctx.reply(actionResult.conversationalResponse);
                 return; // Stop processing, action succeeded
               } else {
+                // Action was attempted but failed - return explicit failure
                 logger.warn(
                   `⚠️  Action execution failed: ${actionResult.error} (executionId: ${actionResult.executionId})`
                 );
-                // Fall through to conversational response
+                await ctx.reply(actionResult.conversationalResponse);
+                return; // Stop processing, return failure explicitly (not fallback)
               }
             } else {
               logger.debug('No capability mapped for this intent, using conversational response');
             }
 
             // STEP 2: Fallback to conversational response (from intent detection or LLM)
+            // Only reached if no capability was selected in STEP 1
             if (intent.fallback_response) {
               await ctx.reply(intent.fallback_response);
               return;
