@@ -63,6 +63,54 @@ describe('authorized test execution', () => {
     }
   });
 
+  test('syncs a pending campaign to APPROVED after the gate is approved', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'exec4c-'));
+    const gate = new ApprovalGate({ autoApprove: false });
+    await gate.initialize();
+    const request = await gate.request({ capabilityId: 'outreach.execute', input: { kind: 'authorized-test' } });
+    await gate.approve(request.id, 'operator', 'authorized self-test only');
+    const stored = {
+      campaignId: 'cmp_stale',
+      kind: 'authorized-test',
+      lifecycle: 'PENDING_APPROVAL',
+      approval: { id: request.id, status: 'pending' },
+      allowlist: { phones: ['+18184381415'], emails: [] },
+      prospects: [{
+        prospectId: 'prs_test',
+        outreachState: 'READY',
+        contact: { phone: '+18184381415' },
+        contacts: [{ personId: 'per_test', phone: '+18184381415' }]
+      }]
+    };
+    const executor = new OutreachExecutor({
+      approvalGate: gate,
+      events: new OutreachEventLog({ dir }),
+      suppression: new SuppressionStore({ dir }),
+      n8n: { execute: async () => ({ status: 'executed', executionId: 'n8n-sync' }) },
+      retell: {
+        makeOutboundCall: async () => ({ status: 'ok', callId: 'call_sync_1', call_id: 'call_sync_1' })
+      },
+      engine: {
+        getCampaign: () => stored,
+        persistCampaign: (next) => Object.assign(stored, next)
+      }
+    });
+    try {
+      process.env.RETELL_TEST_NUMBER = '+18184381415';
+      const out = await executor.execute({
+        approvalId: request.id,
+        campaignId: 'cmp_stale',
+        authorizedTest: true,
+        script: 'self-test'
+      });
+      assert.equal(out.executed, true);
+      assert.equal(out.discoveredProspectsContacted, 0);
+      assert.equal(stored.lifecycle, 'COMPLETED');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test('duplicate authorized email is blocked', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'exec4b-'));
     const gate = new ApprovalGate({ autoApprove: true });

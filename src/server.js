@@ -621,6 +621,17 @@ class HustleBotServer {
               `📝 AUDIT approval ${record.id} ${record.status} by ${record.decidedBy} ` +
               `for ${record.capabilityId}${record.graphId ? ` (plan ${record.graphId})` : ''}`
             );
+            const campaignId = record.input?.campaignId;
+            if (campaignId && this.intelligenceEngine?.getCampaign) {
+              const campaign = this.intelligenceEngine.getCampaign(campaignId);
+              if (campaign) {
+                this.intelligenceEngine.persistCampaign({
+                  ...campaign,
+                  approval: { ...(campaign.approval || {}), id: record.id, status: record.status }
+                });
+                this.intelligenceEngine.refreshApproval?.(this.intelligenceEngine.getCampaign(campaignId));
+              }
+            }
           }
         });
         await this.approvalGate.initialize();
