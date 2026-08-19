@@ -24,6 +24,12 @@ describe('Day-3 capability registration', () => {
     assert.ok(r.has('outreach.plan'));
     assert.ok(r.has('campaign.prepare'));
     assert.ok(r.has('outreach.execute'));
+    assert.ok(r.has('contact.resolve'));
+    assert.ok(r.has('email.validate'));
+    assert.ok(r.has('phone.validate'));
+    assert.ok(r.has('contact.score'));
+    assert.ok(r.has('prospect.priority'));
+    assert.ok(r.has('campaign.control'));
     const gated = r.list().filter((c) => c.requiresApproval).map((c) => c.capabilityId).sort();
     assert.ok(gated.includes('outreach.execute'));
     assert.ok(gated.includes('voice.call'));
@@ -46,5 +52,19 @@ describe('Day-3 capability registration', () => {
       'Find exhibitors from https://www.affiliatesummit.com/west/exhibitors-2026 and build me a prospect list'
     );
     assert.equal(acquisition.capabilityId, 'acquisition.run');
+  });
+
+  test('campaign inspection phrases map to campaign.control and cannot start without that capability', () => {
+    const detector = new IntentDetector({ llm: null, registry: new CapabilityRegistry() });
+    const show = detector.hintCampaignControlIntent('Show me the Qentrax campaign.');
+    assert.equal(show.capabilityId, 'campaign.control');
+    const dms = detector.hintCampaignControlIntent('Show me the decision makers.');
+    assert.equal(dms.capabilityId, 'campaign.control');
+    const start = detector.hintCampaignControlIntent('Start outreach');
+    assert.equal(start.parameters.action, 'start outreach');
+    const prep = detector.hintCampaignControlIntent(
+      'Take the top Qentrax prospects, find the best people to contact, score the contacts, and prepare an outreach campaign. Do not contact anyone.'
+    );
+    assert.equal(prep, null);
   });
 });

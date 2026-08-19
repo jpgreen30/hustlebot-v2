@@ -1,6 +1,6 @@
 /**
  * Qualification profiles are workflow configuration, not core engine logic.
- * Qentrax is one profile used for Day-3 acceptance.
+ * Qentrax is one profile used for Day-3/Day-4 acceptance.
  */
 
 export const QUALIFICATION_PROFILES = {
@@ -30,10 +30,33 @@ export const QUALIFICATION_PROFILES = {
       'ceo', 'founder', 'co-founder', 'cmo', 'cro', 'vp marketing', 'vp growth',
       'head of acquisition', 'affiliate manager', 'partnerships', 'business development',
       'media buyer', 'lead buyer', 'head of partnerships'
-    ]
+    ],
+    targetRoles: [
+      'Head of Lead Generation',
+      'VP of Lead Generation',
+      'VP of Growth',
+      'Head of Growth',
+      'VP of Acquisition',
+      'Head of Acquisition',
+      'Affiliate Manager',
+      'Head of Affiliates',
+      'Partnerships',
+      'Business Development',
+      'Media Buyer',
+      'Performance Marketing',
+      'CMO',
+      'Founder',
+      'CEO'
+    ],
+    priorityWeights: { company: 0.45, contact: 0.35, objective: 0.2 }
   }
 };
 
 export function getQualificationProfile(id = 'qentrax-buyer') {
   return QUALIFICATION_PROFILES[id] || QUALIFICATION_PROFILES['qentrax-buyer'];
+}
+
+export function profileTargetRoles(id = 'qentrax-buyer') {
+  const profile = getQualificationProfile(id);
+  return [...(profile.targetRoles || profile.decisionMakerTitles || [])];
 }

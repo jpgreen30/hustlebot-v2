@@ -109,6 +109,10 @@ export function compactProspect(prospect) {
     intelligence: prospect.intelligence || null,
     validation: prospect.validation || null,
     outreachPlan: prospect.outreachPlan || null,
+    contactQuality: prospect.contactQuality || null,
+    priority: prospect.priority || null,
+    outreachState: prospect.outreachState || 'NOT_CONTACTED',
+    outreachEvents: Array.isArray(prospect.outreachEvents) ? prospect.outreachEvents : [],
     provenance: prospect.provenance,
     workflow: prospect.workflow
   };

@@ -29,8 +29,8 @@ export function scoreProspect(prospect) {
   const email = prospect.validation?.email?.status || (prospect.contact?.email ? 'DISCOVERED' : 'UNKNOWN');
   const phone = prospect.validation?.phone?.status || (prospect.contact?.phone ? 'DISCOVERED' : 'UNKNOWN');
   const contactability = clamp(
-    (email === 'VALIDATED' ? 12 : email === 'DISCOVERED' ? 8 : email === 'RISKY' ? 4 : 0)
-    + (phone === 'VALIDATED' ? 8 : phone === 'DISCOVERED' ? 5 : 0)
+    (email === 'VALIDATED' ? 12 : (email === 'DISCOVERED' || email === 'FORMAT_VALID') ? 8 : email === 'RISKY' ? 4 : 0)
+    + (phone === 'VALIDATED' ? 8 : (phone === 'DISCOVERED' || phone === 'FORMAT_VALID') ? 5 : 0)
     + (prospect.website ? 3 : 0),
     20
   );

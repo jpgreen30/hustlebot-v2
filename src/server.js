@@ -87,6 +87,10 @@ import { EnrichmentRouter } from './intelligence/enrichment.js';
 import { registerIntelligenceCapabilities } from './intelligence/register.js';
 import { OutreachExecutor } from './outreach/execute.js';
 import { OutreachEventLog } from './outreach/events.js';
+import { OutreachEmailProvider } from './outreach/email.js';
+import { SuppressionStore } from './outreach/suppression.js';
+import { CampaignOrchestrator } from './outreach/orchestrate.js';
+import { EmailValidator, PhoneValidator } from './intelligence/validation.js';
 
 class HustleBotServer {
   constructor() {
@@ -626,21 +630,33 @@ class HustleBotServer {
       }
 
       try {
-        logger.info('🧠 Initializing Day-3 intelligence + outreach...');
+        logger.info('🧠 Initializing Day-4 contact intelligence + outreach...');
         this.browserProvider = new BrowserRenderProvider({ firecrawl: this.firecrawlProvider });
         this.apolloProvider = new ApolloProvider();
         this.companyResearcher = new CompanyResearcher({ scraper: this.spiderProvider });
-        this.contactDiscovery = new ContactDiscovery({ scraper: this.spiderProvider });
-        this.enrichmentRouter = new EnrichmentRouter({
-          publicWeb: this.prospectEnricher,
+        this.contactDiscovery = new ContactDiscovery({
+          scraper: this.spiderProvider,
           apollo: this.apolloProvider
         });
+        this.enrichmentRouter = new EnrichmentRouter({
+          publicWeb: this.prospectEnricher,
+          apollo: this.apolloProvider,
+          order: String(process.env.ENRICHMENT_PROVIDER_ORDER || 'PUBLIC_WEB,APOLLO')
+            .split(',')
+            .map((name) => name.trim())
+            .filter(Boolean)
+        });
         this.outreachEvents = new OutreachEventLog();
+        this.suppressionStore = new SuppressionStore();
+        this.outreachEmail = new OutreachEmailProvider();
+        this.emailValidator = new EmailValidator();
+        this.phoneValidator = new PhoneValidator();
         this.outreachExecutor = new OutreachExecutor({
           approvalGate: this.approvalGate,
           retell: this.retellIntegration,
-          email: this.emailIntegration,
-          events: this.outreachEvents
+          email: this.outreachEmail,
+          events: this.outreachEvents,
+          suppression: this.suppressionStore
         });
         this.intelligenceEngine = new IntelligenceEngine({
           browser: this.browserProvider,
@@ -650,10 +666,21 @@ class HustleBotServer {
           researcher: this.companyResearcher,
           contacts: this.contactDiscovery,
           enricher: this.enrichmentRouter,
+          apollo: this.apolloProvider,
           store: this.acquisitionStore,
           events: this.outreachEvents,
           approvalGate: this.approvalGate,
-          n8n: this.n8nIntegration
+          n8n: this.n8nIntegration,
+          suppression: this.suppressionStore
+        });
+        this.outreachExecutor.engine = this.intelligenceEngine;
+        this.outreachExecutor.n8n = this.n8nIntegration;
+        this.campaignOrchestrator = new CampaignOrchestrator({
+          engine: this.intelligenceEngine,
+          executor: this.outreachExecutor,
+          suppression: this.suppressionStore,
+          n8n: this.n8nIntegration,
+          events: this.outreachEvents
         });
         if (this.capabilityRegistry) {
           registerIntelligenceCapabilities(this.capabilityRegistry, {
@@ -663,11 +690,15 @@ class HustleBotServer {
             intelligenceEngine: this.intelligenceEngine,
             outreachExecutor: this.outreachExecutor,
             apolloProvider: this.apolloProvider,
-            enrichmentRouter: this.enrichmentRouter
+            enrichmentRouter: this.enrichmentRouter,
+            emailValidator: this.emailValidator,
+            phoneValidator: this.phoneValidator,
+            emailProvider: this.outreachEmail,
+            campaignOrchestrator: this.campaignOrchestrator
           });
         }
         logger.info(
-          `✅ Day-3 intelligence ready (apollo=${this.apolloProvider.isAvailable() ? 'configured' : 'UNAVAILABLE'})`
+          `✅ Day-4 intelligence ready (apollo=${this.apolloProvider.isAvailable() ? 'configured' : 'UNAVAILABLE'}, email=${this.outreachEmail.isAvailable() ? 'configured' : 'UNAVAILABLE'})`
         );
       } catch (error) {
         logger.warn('⚠️  Intelligence initialization failed, continuing:', error.message);
@@ -1826,6 +1857,44 @@ class HustleBotServer {
       }
     });
 
+    this.app.post('/api/campaign/control', this.actionAuth, this.actionRateLimit, async (req, res) => {
+      try {
+        if (!this.intelligenceEngine) {
+          return res.status(503).json({ error: 'Intelligence engine not initialized' });
+        }
+        res.json(this.intelligenceEngine.control(req.body || {}));
+      } catch (error) {
+        logger.error(`Campaign control error: ${error.message}`);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.post('/api/campaign/test', this.actionAuth, this.actionRateLimit, async (req, res) => {
+      try {
+        if (!this.intelligenceEngine) {
+          return res.status(503).json({ error: 'Intelligence engine not initialized' });
+        }
+        res.json(await this.intelligenceEngine.prepareTestCampaign(req.body || {}));
+      } catch (error) {
+        logger.error(`Test campaign error: ${error.message}`);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.post('/api/campaign/orchestrate', this.actionAuth, this.actionRateLimit, async (req, res) => {
+      try {
+        if (!this.campaignOrchestrator) {
+          return res.status(503).json({ error: 'Campaign orchestrator not initialized' });
+        }
+        const result = await this.campaignOrchestrator.run(req.body || {});
+        const status = result.allowed === false || result.status === 'blocked' ? 403 : 200;
+        res.status(status).json(result);
+      } catch (error) {
+        logger.error(`Campaign orchestrate error: ${error.message}`);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
     this.app.post('/api/outreach/execute', this.actionAuth, this.actionRateLimit, async (req, res) => {
       try {
         if (!this.outreachExecutor) {
@@ -1861,7 +1930,7 @@ class HustleBotServer {
     this.app.get('/day3', (req, res) => {
       const campaigns = this.intelligenceEngine?.listCampaigns(5) || [];
       const apollo = this.apolloProvider?.isAvailable?.() ? 'configured' : 'UNAVAILABLE';
-      const email = 'UNAVAILABLE';
+      const email = this.outreachEmail?.isAvailable?.() ? 'configured' : 'UNAVAILABLE';
       res.type('html').send(`<!doctype html>
 <html><head><meta charset="utf-8"><title>HustleBot Day-3</title>
 <style>body{font-family:ui-sans-serif,system-ui;background:#0f1419;color:#e7ecf1;margin:0;padding:32px;max-width:980px}h1{margin:0 0 8px}code,pre{background:#1b232c;padding:12px;border-radius:8px;display:block;overflow:auto} .ok{color:#7dce82}.bad{color:#ff8b8b}</style>
@@ -1870,10 +1939,29 @@ class HustleBotServer {
 <p>Prospect intelligence, qualification, scoring, and gated outreach prep. Nobody is contacted from this path.</p>
 <p>Browser render: <span class="ok">available</span>
  · Apollo: <span class="${apollo === 'configured' ? 'ok' : 'bad'}">${apollo}</span>
- · Email outreach: <span class="bad">${email}</span></p>
+ · Email outreach: <span class="${email === 'configured' ? 'ok' : 'bad'}">${email}</span></p>
 <h2>Recent campaigns</h2>
 <pre>${JSON.stringify(campaigns, null, 2)}</pre>
 <p>Authenticated <code>POST /api/campaign/prepare</code> prepares a campaign. <code>POST /api/outreach/execute</code> fails closed without approval.</p>
+</body></html>`);
+    });
+
+    this.app.get('/day4', (req, res) => {
+      const campaigns = this.intelligenceEngine?.listCampaigns(8) || [];
+      const apollo = this.apolloProvider?.isAvailable?.() ? 'configured' : 'UNAVAILABLE';
+      const email = this.outreachEmail?.isAvailable?.() ? 'configured' : 'UNAVAILABLE';
+      const providers = this.enrichmentRouter?.providerStatus?.() || {};
+      res.type('html').send(`<!doctype html>
+<html><head><meta charset="utf-8"><title>HustleBot Day-4</title>
+<style>body{font-family:ui-sans-serif,system-ui;background:#0f1419;color:#e7ecf1;margin:0;padding:32px;max-width:1040px}h1{margin:0 0 8px}code,pre{background:#1b232c;padding:12px;border-radius:8px;display:block;overflow:auto} .ok{color:#7dce82}.bad{color:#ff8b8b}</style>
+</head><body>
+<h1>HustleBot Day-4 Contact Intelligence</h1>
+<p>Contact discovery, identity resolution, scoring, suppression, and gated test execution. Discovered prospects are not contacted.</p>
+<p>Apollo: <span class="${apollo === 'configured' ? 'ok' : 'bad'}">${apollo}</span>
+ · Email: <span class="${email === 'configured' ? 'ok' : 'bad'}">${email}</span>
+ · Public web: <span class="${providers.PUBLIC_WEB ? 'ok' : 'bad'}">${providers.PUBLIC_WEB ? 'available' : 'down'}</span></p>
+<h2>Recent campaigns</h2>
+<pre>${JSON.stringify(campaigns, null, 2)}</pre>
 </body></html>`);
     });
 

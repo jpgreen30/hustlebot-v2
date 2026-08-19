@@ -88,6 +88,7 @@ describe('n8n executor', () => {
     const n8n = new N8NIntegration();
     assert.ok(n8n.workflows.has('campaign-prepare'));
     assert.equal(n8n.workflows.get('campaign-prepare').url, 'https://n8n.example/webhook/test');
+    assert.ok(n8n.workflows.has('campaign-orchestrate'));
   });
 
   test('extractProviderExecutionId prefers n8nExecutionId over null executionId', () => {
