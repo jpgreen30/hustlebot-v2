@@ -184,8 +184,9 @@ class ActionBridge {
       input.alias = input.alias || input.workflow || input.name || input.workflowId;
       if (!input.alias) input.alias = 'test';
     }
-    if (capabilityId === 'acquisition.run' || capabilityId === 'prospect.discover' || capabilityId === 'campaign.prepare') {
+    if (capabilityId === 'acquisition.run' || capabilityId === 'prospect.discover' || capabilityId === 'campaign.prepare' || capabilityId === 'campaign.control') {
       input.objective = input.objective || input.query || input.text || input.message;
+      input.query = input.query || input.objective || input.text || input.message;
       input.sourceUrl = input.sourceUrl || input.url || input.source;
       input.maxOrganizations = input.maxOrganizations || input.limit || input.topN || 20;
     }

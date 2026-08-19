@@ -48,4 +48,40 @@ describe('contact.discover', () => {
     const out = await discovery.discover({ organizationName: 'Ad.net', website: 'https://ad.net' });
     assert.equal(out.contacts.length, 0);
   });
+
+  test('uses profile target roles and Apollo people without inventing emails', async () => {
+    const discovery = new ContactDiscovery({
+      scraper: { scrape: async (url) => ({ status: 'ok', url, html: '<p>none</p>', markdown: 'none' }) },
+      apollo: {
+        isAvailable: () => true,
+        searchPeople: async ({ titles }) => {
+          assert.ok(titles.length > 0);
+          return {
+            status: 'ok',
+            people: [{
+              personId: 'p1',
+              providerPersonId: 'p1',
+              fullName: 'Ada West',
+              title: 'VP of Growth',
+              organization: 'Example Co',
+              email: null,
+              phone: null,
+              provider: 'apollo',
+              source: 'apollo:mixed_people/api_search'
+            }]
+          };
+        }
+      }
+    });
+    const out = await discovery.discover({
+      organization: 'Example Co',
+      website: 'https://example-company.test',
+      objective: 'qentrax-buyer',
+      qualificationProfile: 'qentrax-buyer'
+    });
+    assert.equal(out.contacts[0].fullName, 'Ada West');
+    assert.equal(out.contacts[0].email, null);
+    assert.ok(out.targetRoles.includes('VP of Growth'));
+    assert.equal(out.fabricated, false);
+  });
 });

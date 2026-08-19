@@ -48,6 +48,8 @@ Rules:
 - "call +1..." maps to voice.call with phoneNumber and script
 - "find exhibitors", "build a prospect list", "scrape this conference", "acquire companies from this page" maps to acquisition.run. Put the full user message in parameters.objective and any URL in parameters.sourceUrl. Default maxOrganizations to 20.
 - "research them", "qualify them", "rank the best", "decision makers", "prepare an outreach campaign", "prepare a campaign", "do not contact anyone" maps to campaign.prepare. Put the full user message in parameters.objective and any URL in parameters.sourceUrl.
+- "show me the campaign", "who are the top 10", "show me the decision makers", "why is X ranked", "how many have verified contact", "pause the campaign", "resume the campaign", "show me outreach results" maps to campaign.control with parameters.query set to the user message.
+- "start outreach" maps to campaign.control with action start. It must never skip approval.
 - Do not map acquisition or campaign objectives to knowledge.search or web.scrape alone when the user wants a prospect list or outreach prep
 - Respond ONLY with the JSON object, no markdown or explanation`;
 
@@ -113,7 +115,9 @@ class IntentDetector {
         };
       }
 
-      const hinted = this.hintCampaignIntent(userMessage) || this.hintAcquisitionIntent(userMessage);
+      const hinted = this.hintCampaignControlIntent(userMessage)
+        || this.hintCampaignIntent(userMessage)
+        || this.hintAcquisitionIntent(userMessage);
       if (hinted) {
         logger.info(`✅ Intent hinted: ${hinted.intent} → ${hinted.capabilityId}`);
         return hinted;
@@ -258,6 +262,40 @@ class IntentDetector {
         fallback_response: 'I could not parse my analysis. Please try again.'
       };
     }
+  }
+
+  hintCampaignControlIntent(userMessage) {
+    const text = String(userMessage || '').trim();
+    if (!text) return null;
+    const isPrepObjective = /(prepare (an |the )?(outreach )?campaign|research them|do not contact anyone|find the best people|score the contacts)/i.test(text)
+      && !/^(show|who|why|how many|pause|resume|start outreach)/i.test(text);
+    if (isPrepObjective) return null;
+
+    const start = /^(start outreach|begin outreach|launch outreach)\b/i.test(text);
+    const pause = /^pause (the )?campaign\b/i.test(text);
+    const resume = /^resume (the )?campaign\b/i.test(text);
+    const showCampaign = /show me the .*(campaign)|what(?:'s| is) (the )?(qentrax )?campaign/i.test(text);
+    const top = /(?:who are |show me )?(the )?top\s+\d+/i.test(text) && !/prepare/i.test(text);
+    const dms = /decision makers/i.test(text) && /show|who|list/i.test(text);
+    const why = /why is .+(ranked|high|scored)/i.test(text);
+    const verified = /how many.+(verified|contact)/i.test(text);
+    const results = /outreach results/i.test(text);
+    if (!(start || pause || resume || showCampaign || top || dms || why || verified || results)) {
+      return null;
+    }
+    return {
+      intent: start
+        ? 'Request campaign execution (approval still required)'
+        : 'Inspect or control a prepared campaign',
+      capabilityId: 'campaign.control',
+      parameters: {
+        query: text,
+        action: start ? 'start outreach' : pause ? 'pause campaign' : resume ? 'resume campaign' : text
+      },
+      confidence: 0.93,
+      reasoning: 'deterministic campaign-control hint',
+      fallback_response: ''
+    };
   }
 
   hintCampaignIntent(userMessage) {

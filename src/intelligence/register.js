@@ -1,5 +1,5 @@
 /**
- * Register Day-3 intelligence, qualification, and gated outreach capabilities.
+ * Register Day-3/Day-4 intelligence, qualification, and gated outreach capabilities.
  * Does not alter Day-1 platform bindings.
  */
 
@@ -7,6 +7,8 @@ import logger from '../utils/logger.js';
 import { qualifyProspect, qualifyProspects } from './qualify.js';
 import { scoreProspect, rankProspects } from './score.js';
 import { attachValidation, validateEmail, validatePhone } from './validation.js';
+import { resolveContacts } from './identity.js';
+import { attachContactScores, scoreContact, combinedPriority } from './contact-score.js';
 import { planOutreach } from '../outreach/plan.js';
 
 export function registerIntelligenceCapabilities(registry, services = {}) {
@@ -17,7 +19,11 @@ export function registerIntelligenceCapabilities(registry, services = {}) {
     intelligenceEngine,
     outreachExecutor,
     apolloProvider,
-    enrichmentRouter
+    enrichmentRouter,
+    emailValidator,
+    phoneValidator,
+    emailProvider,
+    campaignOrchestrator
   } = services;
 
   const present = (service, method) =>
@@ -94,15 +100,19 @@ export function registerIntelligenceCapabilities(registry, services = {}) {
     {
       capabilityId: 'contact.discover',
       name: 'Discover publicly listed decision makers',
-      description: 'Does not invent names, emails, or titles',
+      description: 'Role-targeted discovery. Does not invent names, emails, or titles',
       provider: 'public-web',
       permissions: ['network.read'],
       inputs: {
         type: 'object',
         properties: {
+          organization: { type: 'string' },
           organizationName: { type: 'string' },
           website: { type: 'string' },
-          contactPage: { type: 'string' }
+          contactPage: { type: 'string' },
+          objective: { type: 'string' },
+          targetRoles: { type: 'array' },
+          qualificationProfile: { type: 'string' }
         }
       },
       expectedCost: 0.001,
@@ -113,9 +123,9 @@ export function registerIntelligenceCapabilities(registry, services = {}) {
     },
     {
       capabilityId: 'prospect.enrich',
-      name: 'Enrich a prospect via Apollo',
-      description: 'Optional Apollo enrichment. Unavailable when no credentials are configured.',
-      provider: 'apollo',
+      name: 'Enrich a prospect via the provider registry',
+      description: 'Configurable PUBLIC_WEB → APOLLO router. Unavailable providers stay unavailable.',
+      provider: 'enrichment-router',
       permissions: ['network.read', 'data.write'],
       inputs: {
         type: 'object',
@@ -128,7 +138,24 @@ export function registerIntelligenceCapabilities(registry, services = {}) {
         if (enrichmentRouter?.enrich) return enrichmentRouter.enrich(input.prospects || [input], input);
         return apolloProvider.enrich(input);
       },
-      isAvailable: ready(apolloProvider, 'enrich')
+      isAvailable: () => Boolean(enrichmentRouter?.isAvailable?.() || apolloProvider?.isAvailable?.())
+    },
+    {
+      capabilityId: 'contact.resolve',
+      name: 'Resolve duplicate people across providers',
+      description: 'Strong identity keys only. Never merge on weak name similarity.',
+      provider: 'identity',
+      permissions: ['data.read'],
+      inputs: {
+        type: 'object',
+        properties: { contacts: { type: 'array' } },
+        required: ['contacts']
+      },
+      expectedCost: 0,
+      expectedLatencyMs: 20,
+      reliability: 0.99,
+      handler: async (input) => resolveContacts(input.contacts || []),
+      isAvailable: () => true
     },
     {
       capabilityId: 'contact.validate',
@@ -150,6 +177,82 @@ export function registerIntelligenceCapabilities(registry, services = {}) {
           phone: validatePhone(input.phone, input)
         };
       },
+      isAvailable: () => true
+    },
+    {
+      capabilityId: 'email.validate',
+      name: 'Validate an email address',
+      description: 'Syntax check unless a validation provider is configured. Never claims VALIDATED without a provider.',
+      provider: 'validation',
+      permissions: ['data.read'],
+      inputs: {
+        type: 'object',
+        properties: { email: { type: 'string' } },
+        required: ['email']
+      },
+      expectedCost: 0,
+      expectedLatencyMs: 40,
+      reliability: 0.99,
+      handler: async (input) => {
+        if (emailValidator?.validate) return emailValidator.validate(input.email, input);
+        return validateEmail(input.email, input);
+      },
+      isAvailable: () => true
+    },
+    {
+      capabilityId: 'phone.validate',
+      name: 'Validate a phone number',
+      description: 'E.164 format check. Does not claim deliverability.',
+      provider: 'validation',
+      permissions: ['data.read'],
+      inputs: {
+        type: 'object',
+        properties: { phone: { type: 'string' } },
+        required: ['phone']
+      },
+      expectedCost: 0,
+      expectedLatencyMs: 40,
+      reliability: 0.99,
+      handler: async (input) => {
+        if (phoneValidator?.validate) return phoneValidator.validate(input.phone, input);
+        return validatePhone(input.phone, input);
+      },
+      isAvailable: () => true
+    },
+    {
+      capabilityId: 'contact.score',
+      name: 'Score contact quality',
+      description: 'Explainable contactability score, not company qualification',
+      provider: 'intelligence-engine',
+      permissions: ['data.read'],
+      inputs: {
+        type: 'object',
+        properties: { contact: { type: 'object' }, prospect: { type: 'object' } }
+      },
+      expectedCost: 0,
+      expectedLatencyMs: 30,
+      reliability: 0.99,
+      handler: async (input) => {
+        if (input.prospect) return attachContactScores(input.prospect, input);
+        return scoreContact(input.contact || input, input);
+      },
+      isAvailable: () => true
+    },
+    {
+      capabilityId: 'prospect.priority',
+      name: 'Combined outreach priority',
+      description: 'Company fit + contact quality + objective relevance',
+      provider: 'intelligence-engine',
+      permissions: ['data.read'],
+      inputs: {
+        type: 'object',
+        properties: { prospect: { type: 'object' }, contact: { type: 'object' } },
+        required: ['prospect']
+      },
+      expectedCost: 0,
+      expectedLatencyMs: 30,
+      reliability: 0.99,
+      handler: async (input) => combinedPriority(input.prospect, input.contact || input.prospect.contacts?.[0] || {}, input),
       isAvailable: () => true
     },
     {
@@ -247,9 +350,46 @@ export function registerIntelligenceCapabilities(registry, services = {}) {
       isAvailable: ready(intelligenceEngine, 'prepare')
     },
     {
+      capabilityId: 'campaign.control',
+      name: 'Inspect or control a prepared campaign',
+      description: 'Show, rank, pause, resume. Start outreach cannot bypass ApprovalGate.',
+      provider: 'intelligence-engine',
+      permissions: ['data.read'],
+      inputs: {
+        type: 'object',
+        properties: {
+          query: { type: 'string' },
+          action: { type: 'string' },
+          campaignId: { type: 'string' }
+        }
+      },
+      expectedCost: 0,
+      expectedLatencyMs: 40,
+      reliability: 0.99,
+      handler: (input) => intelligenceEngine.control({ ...input, action: input.action || input.query }),
+      isAvailable: ready(intelligenceEngine, 'control')
+    },
+    {
+      capabilityId: 'campaign.orchestrate',
+      name: 'Run deterministic campaign orchestration',
+      description: 'n8n records the sequence. Discovered prospects are not contacted.',
+      provider: 'n8n',
+      permissions: ['external.send'],
+      inputs: {
+        type: 'object',
+        properties: { campaignId: { type: 'string' }, approvalId: { type: 'string' } }
+      },
+      expectedCost: 0.01,
+      expectedLatencyMs: 4000,
+      reliability: 0.9,
+      requiresApproval: true,
+      handler: (input) => campaignOrchestrator.run(input),
+      isAvailable: ready(campaignOrchestrator, 'run')
+    },
+    {
       capabilityId: 'outreach.execute',
       name: 'Execute an approved outreach campaign',
-      description: 'Fail-closed without ApprovalGate. Day-3 refuses contacting discovered prospects.',
+      description: 'Fail-closed without ApprovalGate. Discovered prospects stay uncontacted.',
       provider: 'outreach',
       permissions: ['external.send'],
       inputs: {
@@ -257,21 +397,22 @@ export function registerIntelligenceCapabilities(registry, services = {}) {
         properties: {
           approvalId: { type: 'string' },
           campaignId: { type: 'string' },
-          contactDiscoveredProspects: { type: 'boolean' }
+          contactDiscoveredProspects: { type: 'boolean' },
+          authorizedTest: { type: 'boolean' }
         }
       },
       expectedCost: 0.1,
       expectedLatencyMs: 5000,
       reliability: 0.9,
       requiresApproval: true,
-      failureModes: ['approval missing', 'approval pending', 'day-3 contact blocked'],
+      failureModes: ['approval missing', 'approval pending', 'discovered contact blocked'],
       handler: (input) => outreachExecutor.execute(input),
       isAvailable: ready(outreachExecutor, 'execute')
     },
     {
       capabilityId: 'outreach.call',
       name: 'Place an approved campaign call',
-      description: 'Uses Day-1 voice.call / Retell. Day-3 only allows the authorized self-test number.',
+      description: 'Uses Day-1 voice.call / Retell. Only the authorized self-test number is allowed.',
       provider: 'outreach',
       permissions: ['external.send', 'telephony'],
       inputs: {
@@ -281,7 +422,8 @@ export function registerIntelligenceCapabilities(registry, services = {}) {
           phoneNumber: { type: 'string' },
           script: { type: 'string' },
           campaignId: { type: 'string' },
-          prospectId: { type: 'string' }
+          prospectId: { type: 'string' },
+          contactId: { type: 'string' }
         },
         required: ['approvalId', 'phoneNumber', 'script']
       },
@@ -295,7 +437,7 @@ export function registerIntelligenceCapabilities(registry, services = {}) {
     {
       capabilityId: 'outreach.email',
       name: 'Send an approved campaign email',
-      description: 'Provider-abstracted email. Unavailable when no email provider is configured.',
+      description: 'Provider-abstracted email. Only authorized test destinations may be sent.',
       provider: 'outreach',
       permissions: ['external.send'],
       inputs: {
@@ -304,7 +446,11 @@ export function registerIntelligenceCapabilities(registry, services = {}) {
           approvalId: { type: 'string' },
           to: { type: 'string' },
           subject: { type: 'string' },
-          body: { type: 'string' }
+          body: { type: 'string' },
+          campaignId: { type: 'string' },
+          prospectId: { type: 'string' },
+          contactId: { type: 'string' },
+          executionId: { type: 'string' }
         },
         required: ['approvalId']
       },
@@ -312,12 +458,21 @@ export function registerIntelligenceCapabilities(registry, services = {}) {
       expectedLatencyMs: 900,
       reliability: 0.9,
       requiresApproval: true,
-      handler: async () => ({
-        status: 'unavailable',
-        error: 'EMAIL OUTREACH: UNAVAILABLE',
-        reason: 'No production email provider is configured for discovered-prospect outreach'
-      }),
-      isAvailable: () => false
+      handler: async (input) => {
+        if (outreachExecutor?.sendEmail) return outreachExecutor.sendEmail(input);
+        if (emailProvider?.send) {
+          return {
+            status: 'blocked',
+            error: 'email send requires ApprovalGate via outreach.execute/sendEmail'
+          };
+        }
+        return {
+          status: 'unavailable',
+          error: 'EMAIL OUTREACH: UNAVAILABLE',
+          reason: 'No production email provider is configured'
+        };
+      },
+      isAvailable: () => Boolean(outreachExecutor?.sendEmail || emailProvider?.isAvailable?.())
     }
   ];
 

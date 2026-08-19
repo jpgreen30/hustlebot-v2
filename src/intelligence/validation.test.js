@@ -31,4 +31,16 @@ describe('contact validation', () => {
     assert.equal(out.validation.email.status, 'INVALID');
     assert.equal(out.validation.phone.status, 'DISCOVERED');
   });
+
+  test('email.validate syntax check is FORMAT_VALID and never VALIDATED', async () => {
+    const { EmailValidator, PhoneValidator, formatValidateEmail } = await import('./validation.js');
+    const email = new EmailValidator();
+    const checked = await email.validate('ada@katalys.com');
+    assert.equal(checked.status, 'FORMAT_VALID');
+    assert.notEqual(checked.status, 'VALIDATED');
+    assert.equal(formatValidateEmail('ada@katalys.com').status, 'FORMAT_VALID');
+    const phone = await new PhoneValidator().validate('+18184381415');
+    assert.equal(phone.status, 'FORMAT_VALID');
+    assert.ok(phone.e164);
+  });
 });

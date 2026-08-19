@@ -140,7 +140,23 @@ export async function collectDay1Health(server = {}) {
     return { state: 'UNAVAILABLE', detail: 'browser render provider not initialized' };
   });
 
-  const services = { telegram, deepgram, openrouter, retell, n8n, heygen, redis, supabase, firecrawl, spider, browser };
+  const apollo = await safe('apollo', async () => {
+    if (server.apolloProvider?.getHealth) return server.apolloProvider.getHealth();
+    if (!process.env.APOLLO_API_KEY) {
+      return { state: 'UNAVAILABLE', detail: 'APOLLO_API_KEY not set' };
+    }
+    return { state: 'UNAVAILABLE', detail: 'Apollo provider not initialized' };
+  });
+
+  const email = await safe('email', async () => {
+    if (server.outreachEmail?.getHealth) return server.outreachEmail.getHealth();
+    if (!process.env.BREVO_API_KEY) {
+      return { state: 'UNAVAILABLE', detail: 'BREVO_API_KEY not set' };
+    }
+    return { state: 'UNAVAILABLE', detail: 'outreach email provider not initialized' };
+  });
+
+  const services = { telegram, deepgram, openrouter, retell, n8n, heygen, redis, supabase, firecrawl, spider, browser, apollo, email };
   for (const [name, value] of Object.entries(services)) {
     if (!STATES.includes(value.state)) {
       services[name] = { state: 'UNVERIFIED', detail: `invalid state from ${name}` };
