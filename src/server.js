@@ -2753,6 +2753,24 @@ class HustleBotServer {
     if (this.intentDetector && this.actionBridge && this.llm) {
       const intent = await this.intentDetector.detect(text);
 
+      if (intent.error === 'DETECTION_ERROR' || intent.error === 'NO_LLM') {
+        logger.warn(`Intent detection failed (${intent.error}), falling back to LLM`);
+        const response = await this.llm.complete(text, {
+          taskType: 'general',
+          maxTokens: 1000,
+          temperature: 0.7
+        });
+        this.recordDay1Action({
+          source,
+          kind: 'llm',
+          capabilityId: null,
+          success: true,
+          error: intent.error,
+          replyPreview: String(response.content || '').slice(0, 240)
+        });
+        return { reply: response.content, kind: 'llm', intent };
+      }
+
       if (intent.capabilityId) {
         const actionResult = await this.actionBridge.execute(intent, {
           userId,

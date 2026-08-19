@@ -131,7 +131,7 @@ class IntentDetector {
 
       // Call LLM for intent detection
       const response = await this.llm.complete(prompt, {
-        taskType: 'complex_reasoning',
+        taskType: 'general',
         maxTokens: 500,
         temperature: 0.3 // Low temp for consistent, deterministic parsing
       });
