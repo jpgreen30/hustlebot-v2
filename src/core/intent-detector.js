@@ -46,6 +46,8 @@ Rules:
 - "run the test workflow" / "run test workflow" maps to workflow.execute with parameters.alias="test"
 - "create a video saying X" maps to video.generate with parameters.script set to X
 - "call +1..." maps to voice.call with phoneNumber and script
+- "find exhibitors", "build a prospect list", "scrape this conference", "acquire companies from this page" maps to acquisition.run. Put the full user message in parameters.objective and any URL in parameters.sourceUrl. Default maxOrganizations to 20.
+- Do not map acquisition objectives to knowledge.search or web.scrape alone when the user wants a prospect list
 - Respond ONLY with the JSON object, no markdown or explanation`;
 
 class IntentDetector {
@@ -98,6 +100,24 @@ class IntentDetector {
    */
   async detect(userMessage, options = {}) {
     try {
+      if (!userMessage || !userMessage.trim()) {
+        return {
+          intent: null,
+          capabilityId: null,
+          parameters: {},
+          confidence: 0,
+          reasoning: 'Empty message',
+          fallback_response: 'Please send a message with what you need.',
+          error: 'EMPTY_MESSAGE'
+        };
+      }
+
+      const hinted = this.hintAcquisitionIntent(userMessage);
+      if (hinted) {
+        logger.info(`✅ Intent hinted: ${hinted.intent} → ${hinted.capabilityId}`);
+        return hinted;
+      }
+
       if (!this.llm) {
         logger.warn('Intent detector: LLM not available');
         return {
@@ -108,18 +128,6 @@ class IntentDetector {
           reasoning: 'LLM not available for intent detection',
           fallback_response: 'I am currently in a limited mode. Please try again later.',
           error: 'NO_LLM'
-        };
-      }
-
-      if (!userMessage || !userMessage.trim()) {
-        return {
-          intent: null,
-          capabilityId: null,
-          parameters: {},
-          confidence: 0,
-          reasoning: 'Empty message',
-          fallback_response: 'Please send a message with what you need.',
-          error: 'EMPTY_MESSAGE'
         };
       }
 
@@ -249,6 +257,28 @@ class IntentDetector {
         fallback_response: 'I could not parse my analysis. Please try again.'
       };
     }
+  }
+
+  hintAcquisitionIntent(userMessage) {
+    const text = String(userMessage || '');
+    if (!text.trim()) return null;
+    const looksLikeAcquisition = /(exhibitor|prospect list|scrape this|crawl this|find companies|vendor director|acquisition|outreach-ready|affiliate summit)/i.test(text);
+    if (!looksLikeAcquisition) return null;
+    const urlMatch = text.match(/https?:\/\/[^\s)]+/i);
+    const parameters = {
+      objective: text.trim(),
+      maxOrganizations: 20,
+      maxPages: 12
+    };
+    if (urlMatch) parameters.sourceUrl = urlMatch[0].replace(/[.,;]+$/, '');
+    return {
+      intent: 'Run the acquisition pipeline against a public source',
+      capabilityId: 'acquisition.run',
+      parameters,
+      confidence: 0.86,
+      reasoning: 'deterministic acquisition hint',
+      fallback_response: ''
+    };
   }
 }
 

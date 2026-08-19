@@ -60,3 +60,4 @@ pids/
 
 # Generated files
 src/generated/
+src/.data/
