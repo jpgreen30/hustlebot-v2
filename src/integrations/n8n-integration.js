@@ -12,9 +12,30 @@
 
 import logger from '../utils/logger.js';
 
+// Dedicated Day-1 test workflow already live on the shared Ping OS n8n.
+// Overridden by N8N_TEST_WEBHOOK_URL / N8N_WEBHOOK_URL when set.
+const DEFAULT_N8N_TEST_WEBHOOK = 'https://pingos-n8n.onrender.com/webhook/hustlebot-test';
+
+function extractProviderExecutionId(body) {
+  const items = Array.isArray(body) ? body : [body];
+  for (const item of items) {
+    if (!item || typeof item !== 'object') continue;
+    const id =
+      item.n8nExecutionId ||
+      item.executionId ||
+      item.workflowRunId ||
+      item.id;
+    if (id != null && String(id).trim() !== '') return String(id);
+  }
+  return null;
+}
+
 class N8NIntegration {
   constructor(config = {}) {
-    this.webhookUrl = process.env.N8N_WEBHOOK_URL;
+    this.webhookUrl =
+      process.env.N8N_WEBHOOK_URL ||
+      process.env.N8N_TEST_WEBHOOK_URL ||
+      DEFAULT_N8N_TEST_WEBHOOK;
     this.n8nEnabled = !!this.webhookUrl;
     this.retryAttempts = 3;
     this.retryDelay = 1000;
@@ -50,10 +71,12 @@ class N8NIntegration {
     }
 
     // Dedicated test workflow, then fall back to the generic webhook URL.
-    if (process.env.N8N_TEST_WEBHOOK_URL && !this.workflows.has('test')) {
-      this.workflows.set('test', { url: process.env.N8N_TEST_WEBHOOK_URL });
-    } else if (this.webhookUrl && !this.workflows.has('test')) {
-      this.workflows.set('test', { url: this.webhookUrl });
+    const testUrl =
+      process.env.N8N_TEST_WEBHOOK_URL ||
+      this.webhookUrl ||
+      DEFAULT_N8N_TEST_WEBHOOK;
+    if (testUrl && !this.workflows.has('test')) {
+      this.workflows.set('test', { url: testUrl });
     }
 
     if (this.workflows.size > 0) {
@@ -257,8 +280,16 @@ class N8NIntegration {
         throw lastError || new Error('Workflow execution failed after retries');
       }
 
+      let providerBody = null;
+      try {
+        providerBody = await response.json();
+      } catch {
+        providerBody = null;
+      }
+      const providerExecutionId = extractProviderExecutionId(providerBody);
+
       const record = {
-        id: `workflow-${Date.now()}`,
+        id: providerExecutionId || null,
         alias,
         status: 'executed',
         timestamp: new Date(),
@@ -267,24 +298,19 @@ class N8NIntegration {
 
       this.webhookHistory.push(record);
 
-      let providerBody = null;
-      try {
-        providerBody = await response.json();
-      } catch {
-        providerBody = null;
+      if (!providerExecutionId) {
+        logger.warn(`n8n workflow '${alias}' accepted but returned no execution id`);
       }
-      const providerExecutionId =
-        providerBody?.executionId ||
-        providerBody?.id ||
-        providerBody?.workflowRunId ||
-        null;
 
       return {
         alias,
         status: 'executed',
-        executionId: providerExecutionId || record.id,
+        executionId: providerExecutionId,
         providerExecutionId,
         provider: 'n8n',
+        message: Array.isArray(providerBody)
+          ? providerBody[0]?.message
+          : providerBody?.message,
         timestamp: new Date()
       };
     } catch (error) {
@@ -557,4 +583,4 @@ class N8NIntegration {
   }
 }
 
-export { N8NIntegration };
+export { N8NIntegration, DEFAULT_N8N_TEST_WEBHOOK, extractProviderExecutionId };
