@@ -27,9 +27,9 @@ describe('Day-4 engine controls + test campaign', () => {
       assert.equal(prepared.status, 'ok');
       assert.equal(prepared.campaign.kind, 'authorized-test');
       assert.equal(prepared.campaign.prospects[0].contact.phone, '+18184381415');
-      const show = engine.control({ query: 'Show me the Qentrax campaign.' });
+      const show = await engine.control({ query: 'Show me the Qentrax campaign.' });
       assert.match(show.report, /Campaign:/);
-      const start = engine.control({ query: 'Start outreach' });
+      const start = await engine.control({ query: 'Start outreach' });
       assert.equal(start.status, 'blocked');
       assert.equal(start.requiresApproval, true);
     } finally {

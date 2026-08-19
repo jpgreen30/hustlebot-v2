@@ -7,7 +7,7 @@
 import { randomUUID } from 'node:crypto';
 import logger from '../utils/logger.js';
 import { mapEmailEvent, mapRetellEvent, toStoredEvent } from './outcomes.js';
-import { setProspectOutreachState, transitionCampaign } from './campaign.js';
+import { applyApprovalToCampaign, setProspectOutreachState, transitionCampaign } from './campaign.js';
 
 export class OutreachExecutor {
   constructor({
@@ -92,6 +92,16 @@ export class OutreachExecutor {
     }
 
     const campaign = this.engine?.getCampaign?.(input.campaignId) || null;
+    if (campaign && gate.approval) {
+      const synced = applyApprovalToCampaign({
+        ...campaign,
+        approval: { ...(campaign.approval || {}), id: gate.approval.id, status: gate.approval.status }
+      });
+      this.engine?.persistCampaign?.(synced);
+      if (this.isAuthorizedTestCampaign(synced, input)) {
+        return this.executeAuthorizedTest({ ...input, campaign: synced, approval: gate.approval });
+      }
+    }
     if (this.isAuthorizedTestCampaign(campaign, input)) {
       return this.executeAuthorizedTest({ ...input, campaign, approval: gate.approval });
     }

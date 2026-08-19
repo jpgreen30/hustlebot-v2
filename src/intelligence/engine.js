@@ -474,6 +474,17 @@ export class IntelligenceEngine {
     return campaign;
   }
 
+  async refreshApproval(campaign) {
+    if (!campaign?.approval?.id || !this.approvalGate?.get) return campaign;
+    const record = await this.approvalGate.get(campaign.approval.id);
+    if (!record) return campaign;
+    const next = applyApprovalToCampaign({
+      ...campaign,
+      approval: { ...campaign.approval, status: record.status, id: record.id }
+    });
+    return this.persistCampaign(next);
+  }
+
   async prepareTestCampaign(input = {}) {
     const phone = input.phoneNumber || process.env.RETELL_TEST_NUMBER || null;
     const email = input.email || process.env.OUTREACH_TEST_EMAIL || process.env.EMAIL_TEST_DESTINATION || null;
@@ -662,8 +673,9 @@ export class IntelligenceEngine {
     return { status: 'ok', campaignId: campaign.campaignId, lifecycle: resumed.lifecycle, report: `Campaign ${campaign.campaignId} resumed.` };
   }
 
-  control(input = {}) {
-    const campaign = this.getCampaign(input.campaignId || 'latest');
+  async control(input = {}) {
+    let campaign = this.getCampaign(input.campaignId || 'latest');
+    if (campaign) campaign = await this.refreshApproval(campaign);
     const action = String(input.action || input.query || '').trim();
     if (!campaign && !/prepare|test/i.test(action)) {
       return { status: 'empty', report: 'No campaign is loaded yet. Prepare one first.' };
