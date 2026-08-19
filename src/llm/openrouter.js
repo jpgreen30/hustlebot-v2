@@ -35,9 +35,9 @@ class OpenRouterClient {
         best_for: ['code_generation', 'coding', 'programming', 'debugging', 'technical']
       },
       claude_sonnet: {
-        id: 'anthropic/claude-3.5-sonnet',
-        cost_input: 0.003,      // $3 per 1M input tokens
-        cost_output: 0.015,      // $15 per 1M output tokens
+        id: 'anthropic/claude-sonnet-4.5',
+        cost_input: 0.003,
+        cost_output: 0.015,
         speed: 'medium',
         quality: 'highest',
         best_for: ['complex_reasoning', 'planning', 'course_design', 'analysis']
@@ -51,7 +51,7 @@ class OpenRouterClient {
         best_for: ['fast_generation', 'analysis', 'general_purpose']
       },
       grok_2: {
-        id: 'xai/grok-2',
+        id: 'x-ai/grok-4.5',
         cost_input: 0.002,
         cost_output: 0.010,
         speed: 'fast',
@@ -191,37 +191,55 @@ class OpenRouterClient {
 
       logger.debug(`Using model: ${model.id} for task: ${taskType}`);
 
-      // Make API request
-      const response = await fetch(`${this.baseUrl}/chat/completions`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${this.apiKey}`,
-          'Content-Type': 'application/json',
-          'HTTP-Referer': 'https://hustlebot.io',
-          'X-Title': 'HustleBot v2'
-        },
-        body: JSON.stringify({
-          model: model.id,
-          messages: [
-            { role: 'user', content: prompt }
-          ],
-          max_tokens: maxTokens,
-          temperature,
-          top_p: 1
-        })
-      });
+      const requestCompletion = async (modelId) => {
+        const response = await fetch(`${this.baseUrl}/chat/completions`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${this.apiKey}`,
+            'Content-Type': 'application/json',
+            'HTTP-Referer': 'https://hustlebot.io',
+            'X-Title': 'HustleBot v2'
+          },
+          body: JSON.stringify({
+            model: modelId,
+            messages: [
+              { role: 'user', content: prompt }
+            ],
+            max_tokens: maxTokens,
+            temperature,
+            top_p: 1
+          })
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          const message = payload.error?.message || response.statusText;
+          const err = new Error(`OpenRouter API error: ${message}`);
+          err.status = response.status;
+          err.payload = payload;
+          throw err;
+        }
+        return payload;
+      };
 
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(`OpenRouter API error: ${error.error?.message || response.statusText}`);
+      let usedModel = model;
+      let data;
+      try {
+        data = await requestCompletion(model.id);
+      } catch (error) {
+        const deadModel = /no endpoints found|model .* not found|404/i.test(error.message);
+        if (deadModel && model.id !== this.models.deepseek.id) {
+          logger.warn(`OpenRouter model ${model.id} unavailable, falling back to ${this.models.deepseek.id}`);
+          usedModel = this.models.deepseek;
+          data = await requestCompletion(usedModel.id);
+        } else {
+          throw error;
+        }
       }
-
-      const data = await response.json();
 
       // Track usage
       const inputTokens = data.usage?.prompt_tokens || 0;
       const outputTokens = data.usage?.completion_tokens || 0;
-      const cost = this.calculateCost(model, inputTokens, outputTokens);
+      const cost = this.calculateCost(usedModel, inputTokens, outputTokens);
 
       this.requestCount++;
       this.totalTokensUsed += inputTokens + outputTokens;
@@ -233,7 +251,7 @@ class OpenRouterClient {
 
       return {
         content: data.choices?.[0]?.message?.content || '',
-        model: model.id,
+        model: usedModel.id,
         tokens: {
           input: inputTokens,
           output: outputTokens
