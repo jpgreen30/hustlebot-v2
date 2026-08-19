@@ -184,10 +184,10 @@ class ActionBridge {
       input.alias = input.alias || input.workflow || input.name || input.workflowId;
       if (!input.alias) input.alias = 'test';
     }
-    if (capabilityId === 'acquisition.run' || capabilityId === 'prospect.discover') {
+    if (capabilityId === 'acquisition.run' || capabilityId === 'prospect.discover' || capabilityId === 'campaign.prepare') {
       input.objective = input.objective || input.query || input.text || input.message;
       input.sourceUrl = input.sourceUrl || input.url || input.source;
-      input.maxOrganizations = input.maxOrganizations || input.limit || 20;
+      input.maxOrganizations = input.maxOrganizations || input.limit || input.topN || 20;
     }
     return input;
   }
@@ -246,6 +246,7 @@ class ActionBridge {
     if (!obj || typeof obj !== 'object') return String(obj);
 
     const summary = [];
+    if (obj.report && typeof obj.report === 'string') return obj.report;
     if (obj.summary && typeof obj.summary === 'string') return obj.summary;
     if (obj.runId && obj.stats) {
       return `Run ${obj.runId}: ${obj.stats.uniqueOrganizations || 0} orgs, ${obj.stats.pagesSuccessful || 0} pages, workflow ${obj.workflow?.executionId || obj.workflow?.status || 'n/a'}`;

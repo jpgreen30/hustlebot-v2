@@ -47,6 +47,29 @@ describe('FirecrawlProvider', () => {
     assert.ok(body.formats.includes('markdown'));
   });
 
+  test('forwards waitFor, actions, and maxAge for JS-rendered pages', async () => {
+    let body;
+    const provider = new FirecrawlProvider({
+      apiKey: 'fc-test',
+      fetchImpl: mockFetch(async (url, init) => {
+        body = JSON.parse(init.body);
+        return {
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ success: true, data: { markdown: 'x', html: '<p>x</p>', metadata: {} } })
+        };
+      })
+    });
+    await provider.scrape('https://dir.test', {
+      waitFor: 4000,
+      maxAge: 0,
+      actions: [{ type: 'wait', milliseconds: 4000 }]
+    });
+    assert.equal(body.waitFor, 4000);
+    assert.equal(body.maxAge, 0);
+    assert.deepEqual(body.actions, [{ type: 'wait', milliseconds: 4000 }]);
+  });
+
   test('provider HTTP errors stay failures', async () => {
     const provider = new FirecrawlProvider({
       apiKey: 'fc-test',

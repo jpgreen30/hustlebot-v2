@@ -81,6 +81,9 @@ class N8NIntegration {
     if (testUrl && !this.workflows.has('acquisition-test')) {
       this.workflows.set('acquisition-test', { url: testUrl, timeout: 15000 });
     }
+    if (testUrl && !this.workflows.has('campaign-prepare')) {
+      this.workflows.set('campaign-prepare', { url: testUrl, timeout: 20000 });
+    }
 
     if (this.workflows.size > 0) {
       logger.info(`🔗 n8n workflow registry loaded: ${Array.from(this.workflows.keys()).join(', ')}`);

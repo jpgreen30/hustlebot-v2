@@ -43,6 +43,7 @@ export function createProspect(partial = {}) {
       : (partial.sourceType || null),
     sourceEvent: partial.sourceEvent ?? null,
     sourceDate: partial.sourceDate ?? null,
+    booth: partial.booth ?? null,
     contact: { ...emptyContact(), ...(partial.contact || {}) },
     company: {
       ...emptyCompany(),
@@ -98,9 +99,16 @@ export function compactProspect(prospect) {
     sourceUrl: prospect.sourceUrl,
     sourceType: prospect.sourceType,
     sourceEvent: prospect.sourceEvent,
+    booth: prospect.booth || null,
     contact: prospect.contact,
+    contacts: Array.isArray(prospect.contacts) ? prospect.contacts : [],
     company: prospect.company,
     qualification: prospect.qualification,
+    score: prospect.score || null,
+    rank: prospect.rank || null,
+    intelligence: prospect.intelligence || null,
+    validation: prospect.validation || null,
+    outreachPlan: prospect.outreachPlan || null,
     provenance: prospect.provenance,
     workflow: prospect.workflow
   };
