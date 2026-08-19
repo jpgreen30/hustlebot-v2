@@ -120,6 +120,7 @@ class HustleBotServer {
     // Action routing (Intent → Capability execution)
     this.intentDetector = null;
     this.actionBridge = null;
+    this.day1Actions = [];
     // Diagnostics
     this.initializationErrors = [];
   }
@@ -710,7 +711,8 @@ class HustleBotServer {
       res.json({
         status: 'ok',
         timestamp: new Date().toISOString(),
-        service: 'hustlebot-v2'
+        service: 'hustlebot-v2',
+        revision: process.env.RENDER_GIT_COMMIT || null
       });
     });
 
@@ -791,7 +793,10 @@ class HustleBotServer {
       res.json({
         status: 'running',
         version: '2.0.0',
+        revision: process.env.RENDER_GIT_COMMIT || null,
+        branch: process.env.RENDER_GIT_BRANCH || null,
         day1,
+        day1Actions: this.day1Actions.slice(0, 10),
         database: this.db ? 'connected' : 'disconnected',
         llm: this.llm ? 'ready' : 'unavailable',
         telegram: this.bot ? 'connected' : 'disconnected',
@@ -1643,6 +1648,31 @@ class HustleBotServer {
         return res.status(503).json({ error: 'n8n Integration not initialized' });
       }
       res.json(this.n8nIntegration.getStatus());
+    });
+
+    this.app.get('/api/day1/actions', (req, res) => {
+      res.json({
+        revision: process.env.RENDER_GIT_COMMIT || null,
+        actions: this.day1Actions.slice(0, 20)
+      });
+    });
+
+    this.app.post('/api/day1/chat', async (req, res) => {
+      try {
+        const text = String(req.body?.text || '').trim();
+        if (!text) {
+          return res.status(400).json({ error: 'text required' });
+        }
+        const source = req.body?.source === 'voice' ? 'voice' : 'text';
+        const result = await this.processNaturalLanguage(text, {
+          userId: req.body?.userId || 'api',
+          source: `api:${source}`
+        });
+        res.json(result);
+      } catch (error) {
+        logger.error(`Day-1 chat error: ${error.message}`);
+        res.status(500).json({ error: error.message });
+      }
     });
 
     // Debug endpoint
@@ -2694,6 +2724,109 @@ class HustleBotServer {
     });
   }
 
+  recordDay1Action(entry) {
+    this.day1Actions.unshift({
+      at: new Date().toISOString(),
+      ...entry
+    });
+    this.day1Actions = this.day1Actions.slice(0, 20);
+  }
+
+  /**
+   * Shared Intent → Capability → Result path used by Telegram text,
+   * Telegram voice (after Deepgram), and the Day-1 chat probe.
+   */
+  async processNaturalLanguage(text, { userId = 'unknown', source = 'text' } = {}) {
+    if (isStatusRequest(text)) {
+      const snapshot = await collectDay1Health(this);
+      const reply = formatDay1StatusText(snapshot);
+      this.recordDay1Action({
+        source,
+        kind: 'status',
+        capabilityId: null,
+        success: true,
+        replyPreview: reply.slice(0, 240)
+      });
+      return { reply, kind: 'status', snapshot };
+    }
+
+    if (this.intentDetector && this.actionBridge && this.llm) {
+      const intent = await this.intentDetector.detect(text);
+
+      if (intent.capabilityId) {
+        const actionResult = await this.actionBridge.execute(intent, {
+          userId,
+          vertical: null
+        });
+        this.recordDay1Action({
+          source,
+          kind: actionResult.success ? 'action' : 'action_failed',
+          capabilityId: intent.capabilityId,
+          success: actionResult.success,
+          error: actionResult.error || null,
+          executionId: actionResult.executionId || null,
+          replyPreview: String(actionResult.conversationalResponse || '').slice(0, 240)
+        });
+        return {
+          reply: actionResult.conversationalResponse,
+          kind: actionResult.success ? 'action' : 'action_failed',
+          intent,
+          actionResult
+        };
+      }
+
+      if (intent.fallback_response) {
+        this.recordDay1Action({
+          source,
+          kind: 'conversational',
+          capabilityId: null,
+          success: true,
+          replyPreview: String(intent.fallback_response).slice(0, 240)
+        });
+        return {
+          reply: intent.fallback_response,
+          kind: 'conversational',
+          intent
+        };
+      }
+
+      const response = await this.llm.complete(text, {
+        taskType: 'general',
+        maxTokens: 1000,
+        temperature: 0.7
+      });
+      this.recordDay1Action({
+        source,
+        kind: 'llm',
+        capabilityId: null,
+        success: true,
+        replyPreview: String(response.content || '').slice(0, 240)
+      });
+      return { reply: response.content, kind: 'llm', intent };
+    }
+
+    if (this.llm) {
+      const response = await this.llm.complete(text, {
+        taskType: 'general',
+        maxTokens: 1000,
+        temperature: 0.7
+      });
+      this.recordDay1Action({
+        source,
+        kind: 'llm',
+        capabilityId: null,
+        success: true,
+        replyPreview: String(response.content || '').slice(0, 240)
+      });
+      return { reply: response.content, kind: 'llm' };
+    }
+
+    return {
+      reply: 'Got your message! The AI service is loading. Please try again in a moment.',
+      kind: 'unavailable'
+    };
+  }
+
   setupTelegramHandlers() {
     if (!this.bot) return;
 
@@ -2773,23 +2906,6 @@ class HustleBotServer {
           logger.info('Sending transcription back...');
           await ctx.reply(`🎤 You said: "${text}"`);
 
-          if (isStatusRequest(text)) {
-            const snapshot = await collectDay1Health(this);
-            const statusText = formatDay1StatusText(snapshot);
-            await ctx.reply(statusText);
-            try {
-              await ctx.sendChatAction('record_voice');
-              const speech = await this.voice.textToSpeech(statusText, {
-                voice: process.env.DEEPGRAM_TTS_VOICE || 'aura-asteria-en',
-                format: 'ogg'
-              });
-              await ctx.replyWithVoice({ source: speech.audioBuffer });
-            } catch (ttsError) {
-              logger.error('Status TTS failed (non-fatal):', ttsError.message);
-            }
-            return;
-          }
-
           // Try to get AI response (with action routing if available)
           try {
             if (!this.llm) {
@@ -2797,54 +2913,11 @@ class HustleBotServer {
               return;
             }
 
-            let responseText = null;
-
-            // STEP 1: Try action routing (Intent → Capability execution)
-            if (this.intentDetector && this.actionBridge) {
-              try {
-                logger.info('🔍 Detecting intent from transcribed voice message...');
-
-                // Detect intent from transcribed text
-                const intent = await this.intentDetector.detect(text);
-
-                // Try to execute action if capability was detected
-                if (intent.capabilityId) {
-                  logger.info(`📍 Voice intent maps to capability: ${intent.capabilityId}`);
-                  const actionResult = await this.actionBridge.execute(intent, {
-                    userId: ctx.from.id,
-                    vertical: null
-                  });
-
-                  if (actionResult.success) {
-                    logger.info(`✅ Voice action execution succeeded`);
-                    responseText = actionResult.conversationalResponse;
-                  } else {
-                    // Action was attempted but failed - return explicit failure (not fallback)
-                    logger.warn(`⚠️  Voice action failed: ${actionResult.error}`);
-                    responseText = actionResult.conversationalResponse;
-                  }
-                }
-
-                // Use intent fallback only if no action was attempted
-                if (!responseText && intent.fallback_response) {
-                  responseText = intent.fallback_response;
-                }
-              } catch (actionRoutingError) {
-                logger.error('Voice action routing error:', actionRoutingError.message);
-                // Fall through to LLM
-              }
-            }
-
-            // STEP 2: If no action response, use LLM
-            if (!responseText) {
-              logger.info('Getting AI response via LLM...');
-              const response = await this.llm.complete(text, {
-                taskType: 'general',
-                maxTokens: 500
-              });
-              responseText = response.content;
-              logger.info(`✅ AI response ready: ${response.tokens.output} tokens`);
-            }
+            const routed = await this.processNaturalLanguage(text, {
+              userId: ctx.from.id,
+              source: 'telegram-voice'
+            });
+            const responseText = routed.reply;
 
             // Send text response
             await ctx.reply(`🤖 AI: ${responseText}`);
@@ -2896,105 +2969,12 @@ class HustleBotServer {
         const userMessage = ctx.message.text;
         logger.info(`Message from user ${ctx.from.id}: ${userMessage}`);
 
-        if (isStatusRequest(userMessage)) {
-          await ctx.sendChatAction('typing');
-          const snapshot = await collectDay1Health(this);
-          await ctx.reply(formatDay1StatusText(snapshot));
-          return;
-        }
-
-        // Show "typing" indicator
         await ctx.sendChatAction('typing');
-
-        // STEP 1: Try action routing (Intent → Capability execution)
-        if (this.intentDetector && this.actionBridge && this.llm) {
-          try {
-            logger.info('🔍 Detecting intent from user message...');
-
-            // Detect intent from user message
-            const intent = await this.intentDetector.detect(userMessage);
-
-            if (intent.error && intent.error !== 'EMPTY_MESSAGE') {
-              logger.debug(`Intent detection returned error: ${intent.error}`);
-            }
-
-            // Try to execute action if capability was detected
-            if (intent.capabilityId) {
-              logger.info(`📍 Intent maps to capability: ${intent.capabilityId}`);
-              const actionResult = await this.actionBridge.execute(intent, {
-                userId: ctx.from.id,
-                vertical: null
-              });
-
-              if (actionResult.success) {
-                logger.info(`✅ Action execution succeeded (executionId: ${actionResult.executionId})`);
-                await ctx.reply(actionResult.conversationalResponse);
-                return; // Stop processing, action succeeded
-              } else {
-                // Action was attempted but failed - return explicit failure
-                logger.warn(
-                  `⚠️  Action execution failed: ${actionResult.error} (executionId: ${actionResult.executionId})`
-                );
-                await ctx.reply(actionResult.conversationalResponse);
-                return; // Stop processing, return failure explicitly (not fallback)
-              }
-            } else {
-              logger.debug('No capability mapped for this intent, using conversational response');
-            }
-
-            // STEP 2: Fallback to conversational response (from intent detection or LLM)
-            // Only reached if no capability was selected in STEP 1
-            if (intent.fallback_response) {
-              await ctx.reply(intent.fallback_response);
-              return;
-            }
-
-            // STEP 3: If intent detection provided no response, use full LLM
-            logger.info('Using full LLM completion for conversational response');
-            const response = await this.llm.complete(userMessage, {
-              taskType: 'general',
-              maxTokens: 1000,
-              temperature: 0.7
-            });
-
-            logger.info(`AI response for user ${ctx.from.id}: ${response.tokens.input} in, ${response.tokens.output} out, $${response.cost.toFixed(4)} cost`);
-            await ctx.reply(response.content);
-          } catch (actionRoutingError) {
-            logger.error('Action routing error (falling back to LLM):', actionRoutingError.message);
-
-            // Fallback: just use LLM
-            try {
-              const response = await this.llm.complete(userMessage, {
-                taskType: 'general',
-                maxTokens: 1000,
-                temperature: 0.7
-              });
-              await ctx.reply(response.content);
-            } catch (llmError) {
-              logger.error('LLM fallback also failed:', llmError.message);
-              await ctx.reply('⚠️ I encountered an error. Please try again later.');
-            }
-          }
-        } else if (this.llm) {
-          // Action routing not available, use simple LLM
-          logger.info('Action routing not available, using direct LLM');
-          try {
-            const response = await this.llm.complete(userMessage, {
-              taskType: 'general',
-              maxTokens: 1000,
-              temperature: 0.7
-            });
-
-            logger.info(`AI response for user ${ctx.from.id}: ${response.tokens.input} in, ${response.tokens.output} out, $${response.cost.toFixed(4)} cost`);
-            await ctx.reply(response.content);
-          } catch (error) {
-            logger.error('LLM error:', error.message);
-            await ctx.reply('⚠️ AI service temporarily unavailable. Please try again later.');
-          }
-        } else {
-          logger.warn('LLM not initialized, using fallback response');
-          await ctx.reply('Got your message! The AI service is loading. Please try again in a moment.');
-        }
+        const routed = await this.processNaturalLanguage(userMessage, {
+          userId: ctx.from.id,
+          source: 'telegram-text'
+        });
+        await ctx.reply(routed.reply);
       } catch (error) {
         logger.error('Error handling message:', error);
         await ctx.reply('❌ Something went wrong. Please try again.');

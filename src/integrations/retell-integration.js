@@ -337,6 +337,18 @@ class RetellIntegration {
     if (typeof stop.unref === 'function') stop.unref();
   }
 
+  async listAgents() {
+    const response = await fetch(`${this.baseUrl}/list-agents`, {
+      method: 'POST',
+      headers: this.headers(),
+      body: JSON.stringify({})
+    });
+    if (!response.ok) {
+      throw new Error(`Retell list-agents failed (${response.status})`);
+    }
+    return response.json();
+  }
+
   async getCall(callId) {
     const response = await fetch(`${this.baseUrl}/get-call/${callId}`, {
       method: 'GET',
