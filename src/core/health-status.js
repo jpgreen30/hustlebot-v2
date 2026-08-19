@@ -135,7 +135,12 @@ export async function collectDay1Health(server = {}) {
     return { state: 'UNAVAILABLE', detail: 'custom spider not initialized' };
   });
 
-  const services = { telegram, deepgram, openrouter, retell, n8n, heygen, redis, supabase, firecrawl, spider };
+  const browser = await safe('browser', async () => {
+    if (server.browserProvider?.getHealth) return server.browserProvider.getHealth();
+    return { state: 'UNAVAILABLE', detail: 'browser render provider not initialized' };
+  });
+
+  const services = { telegram, deepgram, openrouter, retell, n8n, heygen, redis, supabase, firecrawl, spider, browser };
   for (const [name, value] of Object.entries(services)) {
     if (!STATES.includes(value.state)) {
       services[name] = { state: 'UNVERIFIED', detail: `invalid state from ${name}` };

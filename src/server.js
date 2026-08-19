@@ -78,6 +78,15 @@ import { AcquisitionEngine } from './acquisition/engine.js';
 import { AcquisitionStore } from './acquisition/store.js';
 import { ProspectEnricher } from './acquisition/enrich.js';
 import { registerAcquisitionCapabilities } from './acquisition/register.js';
+import { BrowserRenderProvider } from './providers/browser.js';
+import { ApolloProvider } from './providers/apollo.js';
+import { IntelligenceEngine } from './intelligence/engine.js';
+import { CompanyResearcher } from './intelligence/research.js';
+import { ContactDiscovery } from './intelligence/contacts.js';
+import { EnrichmentRouter } from './intelligence/enrichment.js';
+import { registerIntelligenceCapabilities } from './intelligence/register.js';
+import { OutreachExecutor } from './outreach/execute.js';
+import { OutreachEventLog } from './outreach/events.js';
 
 class HustleBotServer {
   constructor() {
@@ -137,6 +146,14 @@ class HustleBotServer {
     this.acquisitionEngine = null;
     this.actionAuth = null;
     this.actionRateLimit = null;
+    this.browserProvider = null;
+    this.apolloProvider = null;
+    this.companyResearcher = null;
+    this.contactDiscovery = null;
+    this.enrichmentRouter = null;
+    this.intelligenceEngine = null;
+    this.outreachExecutor = null;
+    this.outreachEvents = null;
     // Diagnostics
     this.initializationErrors = [];
   }
@@ -606,6 +623,55 @@ class HustleBotServer {
         logger.info('✅ Approval Gate ready');
       } catch (error) {
         logger.warn('⚠️  Approval Gate initialization failed, continuing:', error.message);
+      }
+
+      try {
+        logger.info('🧠 Initializing Day-3 intelligence + outreach...');
+        this.browserProvider = new BrowserRenderProvider({ firecrawl: this.firecrawlProvider });
+        this.apolloProvider = new ApolloProvider();
+        this.companyResearcher = new CompanyResearcher({ scraper: this.spiderProvider });
+        this.contactDiscovery = new ContactDiscovery({ scraper: this.spiderProvider });
+        this.enrichmentRouter = new EnrichmentRouter({
+          publicWeb: this.prospectEnricher,
+          apollo: this.apolloProvider
+        });
+        this.outreachEvents = new OutreachEventLog();
+        this.outreachExecutor = new OutreachExecutor({
+          approvalGate: this.approvalGate,
+          retell: this.retellIntegration,
+          email: this.emailIntegration,
+          events: this.outreachEvents
+        });
+        this.intelligenceEngine = new IntelligenceEngine({
+          browser: this.browserProvider,
+          firecrawl: this.firecrawlProvider,
+          spider: this.spiderProvider,
+          acquisition: this.acquisitionEngine,
+          researcher: this.companyResearcher,
+          contacts: this.contactDiscovery,
+          enricher: this.enrichmentRouter,
+          store: this.acquisitionStore,
+          events: this.outreachEvents,
+          approvalGate: this.approvalGate,
+          n8n: this.n8nIntegration
+        });
+        if (this.capabilityRegistry) {
+          registerIntelligenceCapabilities(this.capabilityRegistry, {
+            browserProvider: this.browserProvider,
+            companyResearcher: this.companyResearcher,
+            contactDiscovery: this.contactDiscovery,
+            intelligenceEngine: this.intelligenceEngine,
+            outreachExecutor: this.outreachExecutor,
+            apolloProvider: this.apolloProvider,
+            enrichmentRouter: this.enrichmentRouter
+          });
+        }
+        logger.info(
+          `✅ Day-3 intelligence ready (apollo=${this.apolloProvider.isAvailable() ? 'configured' : 'UNAVAILABLE'})`
+        );
+      } catch (error) {
+        logger.warn('⚠️  Intelligence initialization failed, continuing:', error.message);
+        this.initializationErrors.push({ module: 'intelligence', error: error.message });
       }
 
       // Planning swarm: objective in, execution graph out, run durably.
@@ -1735,6 +1801,45 @@ class HustleBotServer {
       }
     });
 
+    this.app.get('/api/campaigns', this.actionAuth, (req, res) => {
+      if (!this.intelligenceEngine) return res.status(503).json({ error: 'Intelligence engine not initialized' });
+      res.json({ campaigns: this.intelligenceEngine.listCampaigns(Number(req.query.limit || 20)) });
+    });
+
+    this.app.get('/api/campaigns/:campaignId', this.actionAuth, (req, res) => {
+      if (!this.intelligenceEngine) return res.status(503).json({ error: 'Intelligence engine not initialized' });
+      const campaign = this.intelligenceEngine.getCampaign(req.params.campaignId);
+      if (!campaign) return res.status(404).json({ error: `Unknown campaign: ${req.params.campaignId}` });
+      res.json({ campaign });
+    });
+
+    this.app.post('/api/campaign/prepare', this.actionAuth, this.actionRateLimit, async (req, res) => {
+      try {
+        if (!this.intelligenceEngine) {
+          return res.status(503).json({ error: 'Intelligence engine not initialized' });
+        }
+        const result = await this.intelligenceEngine.prepare(req.body || {});
+        res.json(result);
+      } catch (error) {
+        logger.error(`Campaign prepare error: ${error.message}`);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.post('/api/outreach/execute', this.actionAuth, this.actionRateLimit, async (req, res) => {
+      try {
+        if (!this.outreachExecutor) {
+          return res.status(503).json({ error: 'Outreach executor not initialized' });
+        }
+        const result = await this.outreachExecutor.execute(req.body || {});
+        const status = result.allowed === false ? 403 : 200;
+        res.status(status).json(result);
+      } catch (error) {
+        logger.error(`Outreach execute error: ${error.message}`);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
     this.app.get('/day2', (req, res) => {
       const providers = this.acquisitionEngine?.providerStatus?.() || {};
       const runs = this.acquisitionEngine?.listRuns(5) || [];
@@ -1750,6 +1855,25 @@ class HustleBotServer {
 <h2>Recent runs</h2>
 <pre>${JSON.stringify(runs, null, 2)}</pre>
 <p>Use Telegram or an authenticated <code>POST /api/acquisition/run</code> to start a run.</p>
+</body></html>`);
+    });
+
+    this.app.get('/day3', (req, res) => {
+      const campaigns = this.intelligenceEngine?.listCampaigns(5) || [];
+      const apollo = this.apolloProvider?.isAvailable?.() ? 'configured' : 'UNAVAILABLE';
+      const email = 'UNAVAILABLE';
+      res.type('html').send(`<!doctype html>
+<html><head><meta charset="utf-8"><title>HustleBot Day-3</title>
+<style>body{font-family:ui-sans-serif,system-ui;background:#0f1419;color:#e7ecf1;margin:0;padding:32px;max-width:980px}h1{margin:0 0 8px}code,pre{background:#1b232c;padding:12px;border-radius:8px;display:block;overflow:auto} .ok{color:#7dce82}.bad{color:#ff8b8b}</style>
+</head><body>
+<h1>HustleBot Day-3 Intelligence</h1>
+<p>Prospect intelligence, qualification, scoring, and gated outreach prep. Nobody is contacted from this path.</p>
+<p>Browser render: <span class="ok">available</span>
+ · Apollo: <span class="${apollo === 'configured' ? 'ok' : 'bad'}">${apollo}</span>
+ · Email outreach: <span class="bad">${email}</span></p>
+<h2>Recent campaigns</h2>
+<pre>${JSON.stringify(campaigns, null, 2)}</pre>
+<p>Authenticated <code>POST /api/campaign/prepare</code> prepares a campaign. <code>POST /api/outreach/execute</code> fails closed without approval.</p>
 </body></html>`);
     });
 
@@ -2839,10 +2963,10 @@ class HustleBotServer {
       return { reply, kind: 'status', snapshot };
     }
 
-    if (this.intentDetector && this.actionBridge && this.llm) {
+    if (this.intentDetector && this.actionBridge) {
       const intent = await this.intentDetector.detect(text);
 
-      if (intent.error === 'DETECTION_ERROR' || intent.error === 'NO_LLM') {
+      if ((intent.error === 'DETECTION_ERROR' || intent.error === 'NO_LLM') && this.llm) {
         logger.warn(`Intent detection failed (${intent.error}), falling back to LLM`);
         const response = await this.llm.complete(text, {
           taskType: 'general',

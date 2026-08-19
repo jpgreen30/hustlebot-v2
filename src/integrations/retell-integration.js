@@ -300,12 +300,24 @@ class RetellIntegration {
           name,
           purpose,
           source: 'hustlebot-v2',
-          generatedAt: new Date().toISOString()
+          generatedAt: new Date().toISOString(),
+          campaignId: options.campaignId || variables.campaignId || null,
+          prospectId: options.prospectId || variables.prospectId || null,
+          organization: options.organization || variables.organization || null,
+          contactName: options.contactName || name,
+          objective: options.objective || purpose,
+          qualificationScore: options.qualificationScore ?? variables.qualificationScore ?? null,
+          executionId: options.executionId || variables.executionId || null
         },
         retell_llm_dynamic_variables: {
           script: String(script),
           name: String(name),
           purpose: String(purpose),
+          campaignId: String(options.campaignId || variables.campaignId || ''),
+          prospectId: String(options.prospectId || variables.prospectId || ''),
+          organization: String(options.organization || variables.organization || ''),
+          qualificationScore: String(options.qualificationScore ?? variables.qualificationScore ?? ''),
+          executionId: String(options.executionId || variables.executionId || ''),
           ...variables
         }
       };

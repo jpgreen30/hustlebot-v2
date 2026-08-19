@@ -47,7 +47,8 @@ Rules:
 - "create a video saying X" maps to video.generate with parameters.script set to X
 - "call +1..." maps to voice.call with phoneNumber and script
 - "find exhibitors", "build a prospect list", "scrape this conference", "acquire companies from this page" maps to acquisition.run. Put the full user message in parameters.objective and any URL in parameters.sourceUrl. Default maxOrganizations to 20.
-- Do not map acquisition objectives to knowledge.search or web.scrape alone when the user wants a prospect list
+- "research them", "qualify them", "rank the best", "decision makers", "prepare an outreach campaign", "prepare a campaign", "do not contact anyone" maps to campaign.prepare. Put the full user message in parameters.objective and any URL in parameters.sourceUrl.
+- Do not map acquisition or campaign objectives to knowledge.search or web.scrape alone when the user wants a prospect list or outreach prep
 - Respond ONLY with the JSON object, no markdown or explanation`;
 
 class IntentDetector {
@@ -112,7 +113,7 @@ class IntentDetector {
         };
       }
 
-      const hinted = this.hintAcquisitionIntent(userMessage);
+      const hinted = this.hintCampaignIntent(userMessage) || this.hintAcquisitionIntent(userMessage);
       if (hinted) {
         logger.info(`✅ Intent hinted: ${hinted.intent} → ${hinted.capabilityId}`);
         return hinted;
@@ -257,6 +258,29 @@ class IntentDetector {
         fallback_response: 'I could not parse my analysis. Please try again.'
       };
     }
+  }
+
+  hintCampaignIntent(userMessage) {
+    const text = String(userMessage || '');
+    if (!text.trim()) return null;
+    const looksLikeCampaign = /(qualify|rank( the)?|decision maker|research them|prepare (an |the )?outreach|prepare (a |the )?campaign|do not contact|don'?t contact|outreach campaign)/i.test(text);
+    if (!looksLikeCampaign) return null;
+    const urlMatch = text.match(/https?:\/\/[^\s)]+/i);
+    const parameters = {
+      objective: text.trim(),
+      maxOrganizations: 20,
+      qualificationProfile: /qentrax/i.test(text) ? 'qentrax-buyer' : undefined
+    };
+    if (urlMatch) parameters.sourceUrl = urlMatch[0].replace(/[.,;]+$/, '');
+    if (!parameters.qualificationProfile) delete parameters.qualificationProfile;
+    return {
+      intent: 'Prepare a qualified outreach campaign without contacting anyone',
+      capabilityId: 'campaign.prepare',
+      parameters,
+      confidence: 0.9,
+      reasoning: 'deterministic campaign-prepare hint',
+      fallback_response: ''
+    };
   }
 
   hintAcquisitionIntent(userMessage) {

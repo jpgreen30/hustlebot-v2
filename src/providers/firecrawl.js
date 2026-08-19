@@ -155,7 +155,10 @@ export class FirecrawlProvider {
           url,
           formats,
           onlyMainContent: options.onlyMainContent !== false,
-          timeout: options.timeout || 60000
+          timeout: options.timeout || 60000,
+          ...(options.waitFor != null ? { waitFor: options.waitFor } : {}),
+          ...(options.maxAge != null ? { maxAge: options.maxAge } : {}),
+          ...(options.actions ? { actions: options.actions } : {})
         }
       });
 
