@@ -196,8 +196,7 @@ class VideoFactory {
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
-          prompt,
-          title: topic || 'HustleBot video'
+          prompt
         })
       });
 
