@@ -8,7 +8,8 @@
  *   Optional: override_agent_id, retell_llm_dynamic_variables, metadata
  *   Response must include call_id. Never invent IDs.
  *
- *   POST https://api.retellai.com/v2/list-agents  (health / init probe)
+ *   POST https://api.retellai.com/v2/list-agents
+ *   GET  https://api.retellai.com/v2/list-phone-numbers
  *   GET  https://api.retellai.com/v2/get-call/{call_id}
  */
 
@@ -16,6 +17,7 @@ import logger from '../utils/logger.js';
 
 const RETELL_BASE = 'https://api.retellai.com/v2';
 const TERMINAL_STATUSES = new Set(['ended', 'error', 'not_connected']);
+const DEFAULT_TEST_NUMBER = '+18184381415';
 
 function normalizeE164(raw) {
   if (!raw) return null;
@@ -33,7 +35,7 @@ function normalizeE164(raw) {
 
 function allowedNumbers() {
   const raw = [
-    process.env.RETELL_TEST_NUMBER,
+    process.env.RETELL_TEST_NUMBER || DEFAULT_TEST_NUMBER,
     process.env.RETELL_ALLOWED_NUMBERS
   ]
     .filter(Boolean)
@@ -41,6 +43,18 @@ function allowedNumbers() {
     .map((value) => normalizeE164(value))
     .filter(Boolean);
   return [...new Set(raw)];
+}
+
+function retellErrorMessage(payload, status, statusText) {
+  if (typeof payload === 'string' && payload.trim()) return payload.trim();
+  return (
+    payload?.error?.message ||
+    payload?.error_message ||
+    payload?.message ||
+    (typeof payload?.error === 'string' ? payload.error : null) ||
+    statusText ||
+    `HTTP ${status}`
+  );
 }
 
 class RetellIntegration {
@@ -53,6 +67,9 @@ class RetellIntegration {
     this.lastProbe = null;
     this.lastError = null;
     this.calls = new Map();
+    this.ownedNumbers = [];
+    this.resolvedFromNumber = null;
+    this.resolvedAgentId = null;
   }
 
   headers() {
@@ -80,6 +97,9 @@ class RetellIntegration {
       if (probe.state !== 'HEALTHY') {
         throw new Error(probe.detail || 'Retell probe failed');
       }
+      await this.refreshOwnedNumbers().catch((error) => {
+        logger.warn(`Retell list-phone-numbers failed: ${error.message}`);
+      });
       this.initialized = true;
       this.lastError = null;
       logger.info('✅ Retell integration ready');
@@ -141,6 +161,62 @@ class RetellIntegration {
     }
   }
 
+  async listPhoneNumbers() {
+    const response = await fetch(`${this.baseUrl}/list-phone-numbers?limit=100`, {
+      method: 'GET',
+      headers: this.headers()
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(`Retell list-phone-numbers failed (${response.status}): ${retellErrorMessage(payload, response.status, response.statusText)}`);
+    }
+    return Array.isArray(payload) ? payload : payload.items || [];
+  }
+
+  async refreshOwnedNumbers() {
+    this.ownedNumbers = await this.listPhoneNumbers();
+    return this.ownedNumbers;
+  }
+
+  async resolveOutboundIdentity() {
+    let numbers = this.ownedNumbers;
+    if (!Array.isArray(numbers) || numbers.length === 0) {
+      try {
+        numbers = await this.refreshOwnedNumbers();
+      } catch (error) {
+        logger.warn(`Could not list Retell phone numbers: ${error.message}`);
+        numbers = [];
+      }
+    }
+
+    const envFrom = normalizeE164(this.fromNumber || process.env.RETELL_FROM_NUMBER);
+    const match = numbers.find((item) => item?.phone_number === envFrom);
+    const withOutbound = numbers.find((item) => Array.isArray(item?.outbound_agents) && item.outbound_agents.length > 0);
+    const chosen = match || withOutbound || numbers[0] || null;
+
+    if (!chosen && !envFrom) {
+      return {
+        error: 'No Retell-owned from_number on this account and RETELL_FROM_NUMBER is not set'
+      };
+    }
+
+    const fromNumber = chosen?.phone_number || envFrom;
+    const boundAgent =
+      chosen?.outbound_agents?.[0]?.agent_id ||
+      chosen?.inbound_agents?.[0]?.agent_id ||
+      null;
+    const envAgent = this.agentId || process.env.RETELL_AGENT_ID || null;
+    const agentId = boundAgent || envAgent || null;
+
+    this.resolvedFromNumber = fromNumber;
+    this.resolvedAgentId = agentId;
+    if (chosen && envFrom && chosen.phone_number !== envFrom) {
+      logger.warn(`RETELL_FROM_NUMBER ${envFrom} is not on this Retell account; using ${fromNumber}`);
+    }
+
+    return { fromNumber, agentId, owned: Boolean(chosen) };
+  }
+
   /**
    * Place an outbound phone call via the official create-phone-call API.
    * Throws on provider/config failure. Never fabricates a call_id.
@@ -165,7 +241,7 @@ class RetellIntegration {
       phoneNumber,
       script,
       name = 'Prospect',
-      purpose = 'Business call',
+      purpose = 'HustleBot production test',
       variables = {},
       agentId = null,
       onUpdate = null
@@ -187,15 +263,6 @@ class RetellIntegration {
       };
     }
 
-    const fromNumber = normalizeE164(this.fromNumber || process.env.RETELL_FROM_NUMBER);
-    if (!fromNumber) {
-      return {
-        status: 'misconfigured',
-        error: 'RETELL_FROM_NUMBER not set (Retell-owned E.164 caller ID)',
-        provider: 'retell'
-      };
-    }
-
     const allow = allowedNumbers();
     if (allow.length > 0 && !allow.includes(toNumber)) {
       return {
@@ -205,42 +272,65 @@ class RetellIntegration {
       };
     }
 
-    const overrideAgentId = agentId || this.agentId || process.env.RETELL_AGENT_ID || null;
+    const identity = await this.resolveOutboundIdentity();
+    if (identity.error) {
+      return {
+        status: 'misconfigured',
+        error: identity.error,
+        provider: 'retell'
+      };
+    }
 
-    const body = {
-      from_number: fromNumber,
-      to_number: toNumber,
-      metadata: {
-        name,
-        purpose,
-        source: 'hustlebot-v2',
-        generatedAt: new Date().toISOString()
-      },
-      retell_llm_dynamic_variables: {
-        script: String(script),
-        name: String(name),
-        purpose: String(purpose),
-        ...variables
-      }
-    };
-    if (overrideAgentId) body.override_agent_id = overrideAgentId;
+    const fromNumber = identity.fromNumber;
+    if (!fromNumber) {
+      return {
+        status: 'misconfigured',
+        error: 'RETELL_FROM_NUMBER not set and no Retell-owned caller ID is available',
+        provider: 'retell'
+      };
+    }
 
-    try {
-      logger.info(`☎️  Creating Retell outbound call to ${toNumber}`);
+    const overrideAgentId = agentId || identity.agentId || null;
 
+    const attempt = async ({ includeAgent }) => {
+      const body = {
+        from_number: fromNumber,
+        to_number: toNumber,
+        metadata: {
+          name,
+          purpose,
+          source: 'hustlebot-v2',
+          generatedAt: new Date().toISOString()
+        },
+        retell_llm_dynamic_variables: {
+          script: String(script),
+          name: String(name),
+          purpose: String(purpose),
+          ...variables
+        }
+      };
+      if (includeAgent && overrideAgentId) body.override_agent_id = overrideAgentId;
+
+      logger.info(`☎️  Creating Retell outbound call to ${toNumber} from ${fromNumber}`);
       const response = await fetch(`${this.baseUrl}/create-phone-call`, {
         method: 'POST',
         headers: this.headers(),
         body: JSON.stringify(body)
       });
-
       const payload = await response.json().catch(() => ({}));
+      return { response, payload, body };
+    };
+
+    try {
+      let { response, payload, body } = await attempt({ includeAgent: true });
+
+      if (!response.ok && response.status === 404 && body.override_agent_id) {
+        logger.warn('Retell create-phone-call 404 with override_agent_id; retrying with number-bound agent only');
+        ({ response, payload, body } = await attempt({ includeAgent: false }));
+      }
+
       if (!response.ok) {
-        const message =
-          payload?.error ||
-          payload?.error_message ||
-          payload?.message ||
-          response.statusText;
+        const message = retellErrorMessage(payload, response.status, response.statusText);
         throw new Error(`Retell create-phone-call failed (${response.status}): ${message}`);
       }
 
@@ -267,6 +357,16 @@ class RetellIntegration {
 
       this.calls.set(callId, callInfo);
       logger.info(`☎️  Call initiated: ${callId} (${callInfo.status})`);
+
+      const live = await this.getCall(callId);
+      if (live) {
+        callInfo.status = live.call_status || callInfo.status;
+        callInfo.duration = live.duration_ms || live.call_duration || 0;
+        callInfo.transcript = live.transcript || null;
+        callInfo.recording = live.recording_url || null;
+        callInfo.providerStatus = live.call_status || null;
+        callInfo.metadata = { ...payload, live };
+      }
 
       if (onUpdate) this.pollCallStatus(callId, onUpdate);
 
@@ -360,19 +460,22 @@ class RetellIntegration {
 
   async getCallResults(callId) {
     const callInfo = this.calls.get(callId);
-    if (!callInfo) throw new Error('Call not found');
+    const live = await this.getCall(callId);
+    if (!callInfo && !live) throw new Error('Call not found');
 
     return {
       callId,
-      phoneNumber: callInfo.phoneNumber,
-      name: callInfo.name,
-      purpose: callInfo.purpose,
-      status: callInfo.status,
-      duration: callInfo.duration,
-      startTime: callInfo.startTime,
-      transcript: callInfo.transcript,
-      summary: callInfo.summary,
-      recording: callInfo.recording
+      phoneNumber: callInfo?.phoneNumber || live?.to_number || null,
+      name: callInfo?.name,
+      purpose: callInfo?.purpose,
+      status: live?.call_status || callInfo?.status || 'unknown',
+      duration: live?.duration_ms || callInfo?.duration || 0,
+      startTime: callInfo?.startTime,
+      transcript: live?.transcript || callInfo?.transcript || null,
+      summary: live?.call_analysis?.call_summary || callInfo?.summary || null,
+      recording: live?.recording_url || callInfo?.recording || null,
+      provider: 'retell',
+      live: live || null
     };
   }
 
@@ -398,8 +501,9 @@ class RetellIntegration {
     return {
       initialized: this.initialized,
       configured: Boolean(this.apiKey),
-      fromNumberConfigured: Boolean(this.fromNumber || process.env.RETELL_FROM_NUMBER),
-      agentConfigured: Boolean(this.agentId),
+      fromNumberConfigured: Boolean(this.fromNumber || process.env.RETELL_FROM_NUMBER || this.resolvedFromNumber),
+      agentConfigured: Boolean(this.agentId || this.resolvedAgentId),
+      ownedNumberCount: this.ownedNumbers.length,
       lastProbe: this.lastProbe,
       lastError: this.lastError,
       totalCalls: this.calls.size
@@ -411,14 +515,14 @@ class RetellIntegration {
     if (!this.apiKey) {
       return { state: 'MISCONFIGURED', detail: 'RETELL_API_KEY not set' };
     }
-    if (!process.env.RETELL_FROM_NUMBER && !this.fromNumber) {
+    if (!process.env.RETELL_FROM_NUMBER && !this.fromNumber && this.ownedNumbers.length === 0) {
       return {
         state: probe.state === 'HEALTHY' ? 'DEGRADED' : probe.state,
-        detail: 'RETELL_FROM_NUMBER missing — outbound calls cannot be placed'
+        detail: 'No Retell-owned from_number available — outbound calls cannot be placed'
       };
     }
     return { state: probe.state, detail: probe.detail };
   }
 }
 
-export { RetellIntegration, normalizeE164 };
+export { RetellIntegration, normalizeE164, DEFAULT_TEST_NUMBER };

@@ -2304,6 +2304,17 @@ class HustleBotServer {
       }
     });
 
+    this.app.get('/api/retell/call/:callId', async (req, res) => {
+      try {
+        if (!this.retellIntegration) return res.status(503).json({ error: 'Retell integration not initialized' });
+        const result = await this.retellIntegration.getCallResults(req.params.callId);
+        res.json(result);
+      } catch (error) {
+        logger.error(`Retell get-call error: ${error.message}`);
+        res.status(404).json({ error: error.message });
+      }
+    });
+
     this.app.get('/api/retell/call-history/:agentId', async (req, res) => {
       try {
         if (!this.retellIntegration) return res.status(503).json({ error: 'Retell integration not initialized' });
