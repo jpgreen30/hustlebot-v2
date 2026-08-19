@@ -41,6 +41,7 @@ describe('HeyGen contract', () => {
     assert.ok(!create.options.headers.Authorization);
     const body = JSON.parse(create.options.body);
     assert.match(body.prompt, /HustleBot is online/);
+    assert.equal(Object.keys(body).join(','), 'prompt');
   });
 
   test('rejects a provider response with no id', async () => {

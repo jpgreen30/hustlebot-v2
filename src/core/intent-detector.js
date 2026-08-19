@@ -38,7 +38,8 @@ Respond with ONLY valid JSON, no other text:
 
 Rules:
 - If the user message clearly maps to a capability, set capabilityId and extract needed parameters
-- If it's vague or conversational, set capabilityId to null
+- If it's vague, conversational, or a general question, set capabilityId to null
+- Do NOT use knowledge.search for ordinary questions or "what is X" chat. That capability is only for searching an internal knowledge base when the user asks to look something up.
 - confidence should reflect how sure you are of the match
 - Only include parameters that are in the user message or clearly inferable
 - If capabilityId is null, provide a helpful conversational response
