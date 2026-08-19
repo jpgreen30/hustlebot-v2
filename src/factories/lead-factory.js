@@ -97,18 +97,13 @@ class LeadFactory {
     try {
       logger.info(`🔍 Acquiring leads from ${source}`);
 
-      if (!this.integrations.firecrawl) {
-        return this.getPlaceholderLeads(source, criteria);
-      }
-
-      // In production: call Firecrawl API to scrape sources
-      // const response = await fetch('https://api.firecrawl.dev/v1/scrape', {
-      //   method: 'POST',
-      //   headers: { 'Authorization': `Bearer ${this.firecrawlApiKey}` },
-      //   body: JSON.stringify({ url: source, ...criteria })
-      // });
-
-      return this.getPlaceholderLeads(source, criteria);
+      return {
+        leads: [],
+        status: 'unavailable',
+        reason: 'LeadFactory no longer returns placeholder prospects. Use acquisition.run.',
+        source,
+        fabricated: false
+      };
     } catch (error) {
       logger.error(`Lead acquisition failed: ${error.message}`);
       return { leads: [], error: error.message };
@@ -206,16 +201,13 @@ class LeadFactory {
       //   });
       // }
 
-      // Mock enrichment
-      const enriched = leads.map(lead => ({
-        ...lead,
-        companySize: Math.random() > 0.5 ? '1-50' : '51-200',
-        industry: 'Healthcare/SaaS',
-        revenue: '$10M-$100M',
-        enrichmentSource: 'apollo'
-      }));
-
-      return { leads: enriched, enrichedCount: leads.length };
+      return {
+        leads,
+        enrichedCount: 0,
+        status: 'unavailable',
+        reason: 'Apollo enrichment is not implemented; refusing to fabricate firmographics',
+        fabricated: false
+      };
     } catch (error) {
       logger.error(`Lead enrichment failed: ${error.message}`);
       return { leads, enrichedCount: 0 };
@@ -342,49 +334,21 @@ class LeadFactory {
   /**
    * Placeholder leads for testing
    */
-  getPlaceholderLeads(source, criteria = {}) {
-    logger.warn(`Using placeholder leads for source: ${source}`);
+  getPlaceholderLeads(source) {
+    logger.warn(`Placeholder lead generation disabled for source: ${source}`);
     return {
-      leads: [
-        {
-          firstName: 'Sarah',
-          lastName: 'Johnson',
-          email: 'sarah@example.com',
-          phone: '5551234567',
-          company: 'TechCorp',
-          title: 'VP of Marketing',
-          location: 'San Francisco, CA',
-          source
-        },
-        {
-          firstName: 'John',
-          lastName: 'Smith',
-          email: 'john@example.com',
-          phone: '5559876543',
-          company: 'HealthCo',
-          title: 'Director of Operations',
-          location: 'New York, NY',
-          source
-        },
-        {
-          firstName: 'Emily',
-          lastName: 'Chen',
-          email: 'emily@example.com',
-          phone: '5555551234',
-          company: 'StartupXYZ',
-          title: 'Founder',
-          location: 'Austin, TX',
-          source
-        }
-      ],
-      source: 'placeholder'
+      leads: [],
+      source: 'disabled',
+      status: 'unavailable',
+      reason: 'Placeholder / example.com leads are not allowed in production',
+      fabricated: false
     };
   }
 
   /**
    * Get lead factory status
    */
-  getStatus() {
+    getStatus() {
     return {
       initialized: true,
       firecrawlEnabled: this.integrations.firecrawl,

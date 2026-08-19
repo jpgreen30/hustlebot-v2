@@ -121,7 +121,21 @@ export async function collectDay1Health(server = {}) {
     return { state: 'HEALTHY', detail: 'database client attached' };
   });
 
-  const services = { telegram, deepgram, openrouter, retell, n8n, heygen, redis, supabase };
+  const firecrawl = await safe('firecrawl', async () => {
+    if (server.firecrawlProvider?.getHealth) return server.firecrawlProvider.getHealth();
+    if (server.scrapingIntegration?.getHealth) return server.scrapingIntegration.getHealth();
+    if (!process.env.FIRECRAWL_API_KEY) {
+      return { state: 'MISCONFIGURED', detail: 'FIRECRAWL_API_KEY not set' };
+    }
+    return { state: 'UNAVAILABLE', detail: 'Firecrawl provider not initialized' };
+  });
+
+  const spider = await safe('spider', async () => {
+    if (server.spiderProvider?.getHealth) return server.spiderProvider.getHealth();
+    return { state: 'UNAVAILABLE', detail: 'custom spider not initialized' };
+  });
+
+  const services = { telegram, deepgram, openrouter, retell, n8n, heygen, redis, supabase, firecrawl, spider };
   for (const [name, value] of Object.entries(services)) {
     if (!STATES.includes(value.state)) {
       services[name] = { state: 'UNVERIFIED', detail: `invalid state from ${name}` };

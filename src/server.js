@@ -70,6 +70,14 @@ import { RedisMailbox } from './core/mailbox-redis.js';
 import { IntentDetector } from './core/intent-detector.js';
 import { ActionBridge } from './core/action-bridge.js';
 import { collectDay1Health, formatDay1StatusText, isStatusRequest } from './core/health-status.js';
+import { requireActionAuth, rateLimitActions } from './core/action-auth.js';
+import { FirecrawlProvider } from './providers/firecrawl.js';
+import { CustomSpider } from './providers/spider.js';
+import { WebSearchProvider } from './providers/web-search.js';
+import { AcquisitionEngine } from './acquisition/engine.js';
+import { AcquisitionStore } from './acquisition/store.js';
+import { ProspectEnricher } from './acquisition/enrich.js';
+import { registerAcquisitionCapabilities } from './acquisition/register.js';
 
 class HustleBotServer {
   constructor() {
@@ -121,6 +129,14 @@ class HustleBotServer {
     this.intentDetector = null;
     this.actionBridge = null;
     this.day1Actions = [];
+    this.firecrawlProvider = null;
+    this.spiderProvider = null;
+    this.webSearchProvider = null;
+    this.acquisitionStore = null;
+    this.prospectEnricher = null;
+    this.acquisitionEngine = null;
+    this.actionAuth = null;
+    this.actionRateLimit = null;
     // Diagnostics
     this.initializationErrors = [];
   }
@@ -395,21 +411,28 @@ class HustleBotServer {
       }
 
       try {
-        logger.info('🕷️  Initializing Scraping Integration...');
-        this.scrapingIntegration = new ScrapingIntegration();
+        logger.info('🕷️  Initializing acquisition providers...');
+        this.firecrawlProvider = new FirecrawlProvider();
+        this.spiderProvider = new CustomSpider();
+        this.webSearchProvider = new WebSearchProvider();
+        this.acquisitionStore = new AcquisitionStore();
+        this.prospectEnricher = new ProspectEnricher({ scraper: this.spiderProvider });
+        this.scrapingIntegration = new ScrapingIntegration({ provider: this.firecrawlProvider });
         await this.scrapingIntegration.initialize();
-        logger.info('✅ Scraping Integration ready');
-      } catch (error) {
-        logger.warn('⚠️  Scraping Integration initialization failed, continuing:', error.message);
-      }
-
-      try {
-        logger.info('🔍 Initializing Enrichment Integration...');
-        this.enrichmentIntegration = new EnrichmentIntegration();
+        this.enrichmentIntegration = new EnrichmentIntegration({ publicEnricher: this.prospectEnricher });
         await this.enrichmentIntegration.initialize();
-        logger.info('✅ Enrichment Integration ready');
+        this.acquisitionEngine = new AcquisitionEngine({
+          firecrawl: this.firecrawlProvider,
+          spider: this.spiderProvider,
+          search: this.webSearchProvider,
+          store: this.acquisitionStore,
+          enricher: this.prospectEnricher,
+          n8n: this.n8nIntegration
+        });
+        logger.info('✅ Acquisition providers ready');
       } catch (error) {
-        logger.warn('⚠️  Enrichment Integration initialization failed, continuing:', error.message);
+        logger.warn('⚠️  Acquisition initialization failed, continuing:', error.message);
+        this.initializationErrors.push({ module: 'acquisition', error: error.message });
       }
 
       try {
@@ -543,6 +566,14 @@ class HustleBotServer {
           }
         });
         registerPlatformCapabilities(this.capabilityRegistry, this);
+        registerAcquisitionCapabilities(this.capabilityRegistry, {
+          firecrawlProvider: this.firecrawlProvider,
+          spiderProvider: this.spiderProvider,
+          webSearchProvider: this.webSearchProvider,
+          acquisitionEngine: this.acquisitionEngine,
+          acquisitionStore: this.acquisitionStore,
+          prospectEnricher: this.prospectEnricher
+        });
         logger.info('✅ Capability Registry ready');
       } catch (error) {
         logger.warn('⚠️  Capability Registry initialization failed, continuing:', error.message);
@@ -1156,7 +1187,10 @@ class HustleBotServer {
     });
 
     // Run a capability by id, letting the registry pick and fall back.
-    this.app.post('/api/capabilities/:capabilityId/invoke', async (req, res) => {
+    this.actionAuth = requireActionAuth();
+    this.actionRateLimit = rateLimitActions({ windowMs: 60_000, max: 40 });
+
+    this.app.post('/api/capabilities/:capabilityId/invoke', this.actionAuth, this.actionRateLimit, async (req, res) => {
       try {
         if (!this.capabilityRegistry) {
           return res.status(503).json({ error: 'Capability Registry not initialized' });
@@ -1605,7 +1639,7 @@ class HustleBotServer {
     });
 
     // n8n Integration endpoints
-    this.app.post('/api/n8n/send-event', async (req, res) => {
+    this.app.post('/api/n8n/send-event', this.actionAuth, this.actionRateLimit, async (req, res) => {
       try {
         if (!this.n8nIntegration) {
           return res.status(503).json({ error: 'n8n Integration not initialized' });
@@ -1657,7 +1691,7 @@ class HustleBotServer {
       });
     });
 
-    this.app.post('/api/day1/chat', async (req, res) => {
+    this.app.post('/api/day1/chat', this.actionAuth, this.actionRateLimit, async (req, res) => {
       try {
         const text = String(req.body?.text || '').trim();
         if (!text) {
@@ -1673,6 +1707,50 @@ class HustleBotServer {
         logger.error(`Day-1 chat error: ${error.message}`);
         res.status(500).json({ error: error.message });
       }
+    });
+
+    this.app.get('/api/acquisition/runs', this.actionAuth, (req, res) => {
+      if (!this.acquisitionEngine) return res.status(503).json({ error: 'Acquisition engine not initialized' });
+      res.json({ runs: this.acquisitionEngine.listRuns(Number(req.query.limit || 20)) });
+    });
+
+    this.app.get('/api/acquisition/runs/:runId', this.actionAuth, (req, res) => {
+      if (!this.acquisitionEngine) return res.status(503).json({ error: 'Acquisition engine not initialized' });
+      const run = this.acquisitionEngine.getRun(req.params.runId);
+      if (!run) return res.status(404).json({ error: `Unknown run: ${req.params.runId}` });
+      const prospects = this.acquisitionStore?.listProspects({ runId: req.params.runId }) || [];
+      res.json({ run, prospects });
+    });
+
+    this.app.post('/api/acquisition/run', this.actionAuth, this.actionRateLimit, async (req, res) => {
+      try {
+        if (!this.acquisitionEngine) {
+          return res.status(503).json({ error: 'Acquisition engine not initialized' });
+        }
+        const result = await this.acquisitionEngine.run(req.body || {});
+        res.json(result);
+      } catch (error) {
+        logger.error(`Acquisition run error: ${error.message}`);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.get('/day2', (req, res) => {
+      const providers = this.acquisitionEngine?.providerStatus?.() || {};
+      const runs = this.acquisitionEngine?.listRuns(5) || [];
+      res.type('html').send(`<!doctype html>
+<html><head><meta charset="utf-8"><title>HustleBot Day-2</title>
+<style>body{font-family:ui-sans-serif,system-ui;background:#0f1419;color:#e7ecf1;margin:0;padding:32px}h1{margin:0 0 8px}code,pre{background:#1b232c;padding:12px;border-radius:8px;display:block;overflow:auto} .ok{color:#7dce82}.bad{color:#ff8b8b}</style>
+</head><body>
+<h1>HustleBot Day-2 Acquisition Engine</h1>
+<p>Discovery and workflow prep. No outbound contact from this path.</p>
+<p>Firecrawl: <span class="${providers.firecrawl ? 'ok' : 'bad'}">${providers.firecrawl ? 'available' : 'not configured'}</span>
+ · Spider: ${providers.spider ? 'available' : 'down'}
+ · Search: ${providers.search ? 'available' : 'down'}</p>
+<h2>Recent runs</h2>
+<pre>${JSON.stringify(runs, null, 2)}</pre>
+<p>Use Telegram or an authenticated <code>POST /api/acquisition/run</code> to start a run.</p>
+</body></html>`);
     });
 
     // Debug endpoint
