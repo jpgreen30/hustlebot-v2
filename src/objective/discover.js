@@ -4,7 +4,7 @@ import { mapLimit } from './util.js';
 import { planSearchQueries } from '../intel/queries.js';
 
 const AGGREGATOR_HOST = /(^|\.)(yelp|angi|thumbtack|bbb|mapquest|forbes|bing|google|duckduckgo|homeguide|ontoplist|expertise|yellowpages|superpages|manta|hotfrog)\.com$|(^|\.)(roof\.info)$/i;
-const JUNK_HOST = /(^|\.)(wikipedia\.org|britannica\.com|latimes\.com|nytimes\.com|washingtonpost\.com|cnn\.com|bbc\.com|merriam-webster\.com|spanishdict\.com|dictionary\.cambridge\.org|collinsdictionary\.com|definitions\.net|wikihow\.com|quora\.com|imdb\.com|abbreviationfinder\.org|acronymfinder\.com)$/i;
+const JUNK_HOST = /(^|\.)(wikipedia\.org|britannica\.com|latimes\.com|nytimes\.com|washingtonpost\.com|cnn\.com|bbc\.com|merriam-webster\.com|spanishdict\.com|dictionary\.cambridge\.org|collinsdictionary\.com|definitions\.net|dictionary\.com|thefreedictionary\.com|urbandictionary\.com|wikihow\.com|quora\.com|imdb\.com|abbreviationfinder\.org|acronymfinder\.com|microsoft\.com|xbox\.com|fortnite\.gg|epicgames\.com)$/i;
 const CLINICAL_HOST = /(^|\.)(clevelandclinic\.org|cdc\.gov|mayoclinic\.org|nih\.gov|medlineplus\.gov|webmd\.com|healthline\.com|kidshealth\.org|childmind\.org|apa\.org|who\.int|nhs\.uk)$/i;
 const VIDEO_HOST = /(^|\.)(youtube\.com|youtu\.be|vimeo\.com|dailymotion\.com)$/i;
 const WEAK_QUERY_TOKEN = new Set([
@@ -12,7 +12,10 @@ const WEAK_QUERY_TOKEN = new Set([
   'businesses', 'official', 'website', 'south', 'north', 'west', 'east', 'city',
   'area', 'county', 'region', 'service', 'services', 'research', 'compare',
   'relevant', 'positioning', 'presence', 'anyone', 'contact', 'platforms',
-  'audience', 'public', 'major', 'differentiators', 'experience'
+  'audience', 'public', 'major', 'differentiators', 'experience', 'competitive',
+  'landscape', 'solutions', 'serving', 'identify', 'providers', 'available',
+  'market', 'gaps', 'supported', 'evidence', 'practices', 'pricing', 'appear',
+  'enough', 'operating', 'plausible', 'buyers'
 ]);
 
 function hostOf(url) {
@@ -47,15 +50,18 @@ function nameFromTitleMatchingHost(title, brand) {
       candidates.push(tokens.slice(i, i + n).join(' '));
     }
   }
+  let best = null;
   for (const candidate of candidates) {
     const cc = compactAlnum(candidate);
     if (!cc) continue;
-    if ((cc === want || cc.includes(want)) && candidate.split(/\s+/).length <= 6
-      && !/^\d+\s+(best|top)|week[- ]by[- ]week|symptoms|what is/i.test(candidate)) {
-      return candidate;
+    if (/^\d+\s+(best|top)|week[- ]by[- ]week|symptoms|what is/i.test(candidate)) continue;
+    if (candidate.split(/\s+/).length > 6) continue;
+    if (cc === want) return candidate;
+    if (want.startsWith(cc) && cc.length >= Math.min(6, want.length * 0.6)) {
+      if (!best || candidate.length < best.length) best = candidate;
     }
   }
-  return null;
+  return best;
 }
 
 function preferDisplayName(current, incoming) {
@@ -71,9 +77,11 @@ function preferDisplayName(current, incoming) {
   return current;
 }
 
+export { compactAlnum, nameFromTitleMatchingHost, preferDisplayName };
+
 export function discoveryIntent(query = '', objective = '') {
   const blob = `${query} ${objective}`.toLowerCase();
-  const wantCompanies = /(compan|app\b|apps\b|platform|product|startup|vendor|competitor|software|saas|marketplace)/i.test(blob);
+  const wantCompanies = /(compan|app\b|apps\b|platform|product|startup|vendor|competitor|competitive landscape|software|saas|marketplace|providers|receptionist|roofing|contractor)/i.test(blob);
   const wantMedical = /(medical|clinical|treatment|symptom|guideline|diagnosis|disease|health information|cdc|what are the signs)/i.test(blob);
   return { wantCompanies, wantMedical };
 }
@@ -92,7 +100,8 @@ function looksLikeArticle(item = {}) {
   if (/:\s*(medlineplus|cleveland clinic|mayo clinic|cdc|wikipedia|britannica)\b/i.test(title)) return true;
   if (/\b(symptoms|treatment|diagnosis|what is|overview|fact sheet)\b/i.test(title) && CLINICAL_HOST.test(hostOf(url))) return true;
   if (/^\d+\s+(best|top)\b/i.test(title)) return true;
-  if (/\b(what is|definition,|types, methods|beginner's guide|how to (start|do)|preparing for a baby|pregnancy information)\b/i.test(title)) return true;
+  if (/\b(what is|definition[,:]?|types, methods|beginner's guide|how to (start|do)|preparing for a baby|pregnancy information)\b/i.test(title)) return true;
+  if (/\b(definition & meaning|definition of)\b/i.test(title)) return true;
   if (/\bweek[- ]by[- ]week\b|\bsymptoms\s*(&|and)\s*signs\b|\bbaby development\b|\btrimester (guide|calendar)\b/i.test(title)) return true;
   if (/week-by-week|symptoms-and-signs|baby-development/i.test(path)) return true;
   if (/(researchgate\.net|scribbr\.com|questionpro\.com|researchmethod\.net|ideascale\.com)$/i.test(hostOf(url))) return true;
@@ -109,10 +118,31 @@ export function looksLikeCompany(item = {}) {
   if (JUNK_HOST.test(host) || CLINICAL_HOST.test(host) || VIDEO_HOST.test(host)) return false;
   if (isAggregator(url)) return false;
   if (/^(best|top|list of|how to)\b/i.test(title)) return false;
+  if (looksLikeSeoServiceTitle(title)) return false;
   const productTerms = /\b(app|apps|platform|software|saas|product|marketplace|tracker|network)\b/i.test(`${title} ${snippet} ${host}`);
   const brandLike = title.split(/\s+/).length <= 6 && !/\b(in |near |review|guide|article)\b/i.test(title);
-  const firstParty = Boolean(host) && title.toLowerCase().split(/\s+/).some((tok) => tok.length > 3 && host.includes(tok.toLowerCase().replace(/[^a-z0-9]/g, '')));
+  const firstParty = firstPartyName(title, host);
   return productTerms || firstParty || brandLike;
+}
+
+function firstPartyName(title, host) {
+  if (!title || !host) return false;
+  const sld = host.split('.')[0].replace(/-/g, '');
+  const compactTitle = compactAlnum(title);
+  if (compactTitle.length >= 4 && compactTitle === sld) return true;
+  const tokens = String(title).split(/\s+/).map((t) => compactAlnum(t)).filter((t) => t.length >= 4);
+  const joined = tokens.join('');
+  if (joined.length >= 4 && (joined === sld || sld.startsWith(joined))) return true;
+  if (joined.startsWith(sld) && joined.length <= sld.length + 12) return true;
+  return tokens.some((t) => (sld === t) || (t.length >= 5 && sld.startsWith(t) && t.length >= sld.length * 0.5));
+}
+
+function looksLikeSeoServiceTitle(title) {
+  const value = String(title || '');
+  if (/^(top|best)\b/i.test(value) && /\b(companies|contractors|apps|providers)\b/i.test(value)) return true;
+  if (/\bin los angeles\b/i.test(value) && /\b(contractor|repair|replacement)\b/i.test(value) && !/\b(inc|llc|ltd|corp)\b/i.test(value)) return true;
+  if (/\|/.test(value) && /\b(roof repair|replacement|contractor in)\b/i.test(value)) return true;
+  return false;
 }
 
 export function commercialScore(item = {}, intent = {}) {
@@ -148,7 +178,8 @@ export function isJunkResult(item = {}, intent = {}) {
 function looksLikeDirectory(item = {}) {
   if (isAggregator(item.url)) return true;
   const hay = `${item.title || ''} ${item.snippet || ''} ${item.url || ''}`.toLowerCase();
-  return /(best |top \d+|directory|companylist|contractors in|list of|near me)/.test(hay);
+  if (looksLikeSeoServiceTitle(item.title || item.organizationName || '')) return true;
+  return /(best |top \d+|directory|companylist|contractors in|list of|near me|^top |^best )/.test(hay);
 }
 
 function promoteArticleToCompany(item = {}, intent = {}) {
@@ -207,6 +238,7 @@ function matchesQuery(item, query) {
   const tokens = queryTokens(query).filter((token) => !WEAK_QUERY_TOKEN.has(token));
   const q = String(query || '').toLowerCase();
   if (/\bapps?\b/.test(q)) tokens.push('app', 'apps');
+  if (/\bai\b/.test(q)) tokens.push('ai');
   if (!tokens.length) return !isJunkResult(item, discoveryIntent(query));
   const hay = `${item.title || ''} ${item.url || ''} ${item.snippet || ''}`.toLowerCase();
   return tokens.some((token) => hayHasToken(hay, token) || (token.length > 4 && hay.includes(token)));
@@ -218,12 +250,12 @@ function onTopic(item, query, intent = {}) {
     return false;
   }
   const hay = `${item.title || ''} ${item.snippet || ''}`.toLowerCase();
-  if (/\b(semicolon|writing center|grammar exercise|punctuation guide)\b/i.test(hay)) return false;
+  if (/\b(semicolon|writing center|grammar exercise|punctuation guide|definition & meaning|fortnite)\b/i.test(hay)) return false;
   if (matchesQuery(item, query)) return true;
-  if (intent.wantCompanies && /\b(app|apps|platform|software|saas|tracker|marketplace|contractor)\b/i.test(`${hay} ${host}`)) {
+  if (intent.wantCompanies && /\b(app|apps|platform|software|saas|tracker|marketplace)\b/i.test(`${hay} ${host}`) && matchesQuery(item, query)) {
     return true;
   }
-  if (looksLikeDirectory(item)) return true;
+  if (looksLikeDirectory(item) && matchesQuery(item, query)) return true;
   return false;
 }
 
@@ -420,7 +452,7 @@ export class OrgDiscovery {
         query,
         geography: input.location || null,
         slices: (Array.isArray(input.slices) && input.slices.length) ? input.slices : undefined,
-        maxQueries: intent.wantCompanies ? 7 : 5
+        maxQueries: 5
       });
       const queries = planned.length ? planned.map((p) => p.query) : [query];
       const primaryResults = [];
@@ -456,13 +488,14 @@ export class OrgDiscovery {
           return item;
         }).filter(Boolean).filter((item) => {
           if (isJunkResult(item, intent)) return false;
+          if (!item.organizationName && !item.title && !item.name) return false;
           const topicalQuery = item._query || query;
           if (!onTopic(item, topicalQuery, intent) && !onTopic(item, query, intent)) return false;
           if (item.promotedFrom) return looksLikeCompany(item);
           if (extraSet.has(String(item.url || '').toLowerCase())) {
             return looksLikeCompany(item) || looksLikeDirectory(item);
           }
-          return matchesQuery(item, query) || looksLikeCompany(item);
+          return looksLikeCompany(item) || looksLikeDirectory(item);
         });
         const direct = [];
         const directories = [];
@@ -568,8 +601,10 @@ export async function researchBatch(researcher, prospects = [], { concurrency = 
         sourceUrl: prospect.sourceUrl
       });
       if (intel.status === 'ok' && intel.intelligence) {
+        const researchedName = intel.intelligence.companyName?.value;
         return {
           ...prospect,
+          organizationName: preferDisplayName(prospect.organizationName, researchedName) || prospect.organizationName,
           intelligence: intel.intelligence,
           description: prospect.description || intel.intelligence.description?.value || null
         };

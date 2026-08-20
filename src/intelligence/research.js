@@ -5,6 +5,7 @@
 
 import * as cheerio from 'cheerio';
 import { normalizeDomain, normalizeSocialUrl, normalizeUrl } from '../acquisition/normalize.js';
+import { nameFromTitleMatchingHost, preferDisplayName } from '../objective/discover.js';
 
 function field(value, status, source, confidence = status === 'VERIFIED' ? 0.85 : status === 'INFERRED' ? 0.45 : 0) {
   return {
@@ -59,6 +60,9 @@ export class CompanyResearcher {
     const markdown = page?.markdown || '';
     const $ = html ? cheerio.load(html) : null;
     const title = $ ? (textOf($, 'title') || textOf($, 'h1')) : null;
+    const brand = domain ? String(domain).split('.')[0] : '';
+    const titledName = title ? nameFromTitleMatchingHost(title, brand) : null;
+    const resolvedName = preferDisplayName(name, titledName) || name || titledName;
     const metaDesc = $
       ? ($('meta[name="description"]').attr('content') || $('meta[property="og:description"]').attr('content') || null)
       : null;
@@ -81,10 +85,10 @@ export class CompanyResearcher {
     if (Array.isArray(input.company?.socialUrls)) socials.push(...input.company.socialUrls);
 
     const contactPage = this.findContactPage($, website);
-    const industry = this.inferIndustry(`${name || ''} ${description.value || ''} ${title || ''}`);
+    const industry = this.inferIndustry(`${resolvedName || ''} ${description.value || ''} ${title || ''}`);
 
     const intelligence = {
-      companyName: field(name, name ? 'VERIFIED' : 'UNKNOWN', input.sourceUrl || website),
+      companyName: field(resolvedName, resolvedName ? 'VERIFIED' : 'UNKNOWN', input.sourceUrl || website),
       domain: field(domain, domain ? 'VERIFIED' : 'UNKNOWN', website),
       website: field(website, website ? 'VERIFIED' : 'UNKNOWN', website),
       description,

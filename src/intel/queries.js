@@ -90,7 +90,7 @@ export function planSearchQueries(input = {}) {
     push(`${primary} pricing`, 'market-map public pricing');
   }
 
-  const cap = Number(input.maxQueries || (wantProducts ? 7 : 5));
+  const cap = Number(input.maxQueries || 5);
   return out.slice(0, cap);
 }
 

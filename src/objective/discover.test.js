@@ -254,5 +254,54 @@ describe('OrgDiscovery search-shaped routing', () => {
     assert.match(names, /HomeRepairly|Dorantes/i);
     assert.ok(!out.prospects.some((p) => /abbreviation|los mean/i.test(`${p.organizationName} ${p.website}`)));
   });
+
+  test('SEO listicles and dictionary hits are not dental AI providers', async () => {
+    const discovery = new OrgDiscovery({
+      search: {
+        search: async () => ({
+          status: 'ok',
+          provider: 'bing',
+          results: [
+            { title: 'Visit California - Official Travel & Tourism Website', url: 'https://www.visitcalifornia.com', snippet: 'Official California tourism' },
+            { title: 'COMPETITIVE Definition & Meaning | Dictionary.com', url: 'https://www.dictionary.com/browse/competitive', snippet: 'Definition of competitive' },
+            { title: 'Fortnite Override Codes (August 2026)', url: 'https://fortnite.gg/override', snippet: 'Game codes' },
+            { title: 'Get a refund for apps and games purchased from Microsoft Store', url: 'https://www.microsoft.com/en-us/refund', snippet: 'Refunds' },
+            { title: 'Ruby Receptionist', url: 'https://www.ruby.com', snippet: 'AI receptionist and live answering for dental and medical practices in California' }
+          ]
+        })
+      }
+    });
+    const out = await discovery.discover({
+      query: 'AI receptionist solutions serving dental practices in California',
+      objective: 'Research the competitive landscape for AI receptionist solutions serving dental practices in California. Do not contact anyone.',
+      maxOrganizations: 8
+    });
+    const blob = out.prospects.map((p) => `${p.organizationName} ${p.website}`).join(' | ');
+    assert.match(blob, /Ruby/i);
+    assert.ok(!/visitcalifornia|dictionary\.com|fortnite|microsoft\.com\/en-us\/refund/i.test(blob));
+  });
+
+  test('generic roofing SEO titles are not treated as companies', async () => {
+    const discovery = new OrgDiscovery({
+      search: {
+        search: async () => ({
+          status: 'ok',
+          provider: 'bing',
+          results: [
+            { title: 'Roofing Contractor in Los Angeles, CA | Roof Repair & Replacement', url: 'https://www.random-seo-roof.example', snippet: 'Roof repair' },
+            { title: 'Top Roofing Companies in Los Angeles, CA', url: 'https://www.listicle-roof.example/top', snippet: 'List of roofers' },
+            { title: 'Modern Roofing Inc', url: 'https://www.modernroofing.com', snippet: 'Los Angeles roofing contractor' }
+          ]
+        })
+      }
+    });
+    const out = await discovery.discover({
+      query: 'Los Angeles roofing companies',
+      objective: 'Find 10 roofing companies in Los Angeles. Do not contact anyone.',
+      maxOrganizations: 8
+    });
+    assert.ok(out.prospects.some((p) => /Modern Roofing/i.test(p.organizationName)));
+    assert.ok(!out.prospects.some((p) => /Top Roofing Companies|Roof Repair & Replacement/i.test(p.organizationName)));
+  });
 });
 
