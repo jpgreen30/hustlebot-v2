@@ -234,13 +234,25 @@ function hayHasToken(hay, token) {
   }
 }
 
+function hayForMatch(item = {}) {
+  const url = item.url || item.website || '';
+  let hostpath = '';
+  try {
+    const parsed = new URL(url);
+    hostpath = `${parsed.hostname} ${parsed.pathname}`;
+  } catch {
+    hostpath = url;
+  }
+  return `${item.title || ''} ${hostpath} ${item.snippet || ''}`.toLowerCase();
+}
+
 function matchesQuery(item, query) {
   const tokens = queryTokens(query).filter((token) => !WEAK_QUERY_TOKEN.has(token));
   const q = String(query || '').toLowerCase();
   if (/\bapps?\b/.test(q)) tokens.push('app', 'apps');
   if (/\bai\b/.test(q) && !/\breceptionist|dental|pregnan/i.test(q)) tokens.push('ai');
   if (!tokens.length) return !isJunkResult(item, discoveryIntent(query));
-  const hay = `${item.title || ''} ${item.url || ''} ${item.snippet || ''}`.toLowerCase();
+  const hay = hayForMatch(item);
   const hits = tokens.filter((token) => hayHasToken(hay, token) || (token.length > 4 && hay.includes(token)));
   if (!hits.length) return false;
   const distinctive = tokens.filter((t) => t.length >= 8 || /^(dental|roofing|receptionist)$/i.test(t));
@@ -304,6 +316,8 @@ function toProspect(record, sourceUrl, provider) {
   const name = record.organizationName || record.name || record.title || null;
   const website = normalizeUrl(record.website || record.url || record.link || null);
   if (!name && !website) return null;
+  if (/^use my location$/i.test(String(name || ''))) return null;
+  if (/yellowpages\.com\/search/i.test(String(website || sourceUrl || ''))) return null;
   if (looksLikeSeoServiceTitle(name)) return null;
   if (isJunkResult({ url: website || sourceUrl, title: name }, discoveryIntent(name))) return null;
   return {

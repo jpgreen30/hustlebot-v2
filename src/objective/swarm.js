@@ -126,6 +126,8 @@ export class SwarmOrchestrator {
     return (findings || []).filter((p) => {
       const item = { title: p.organizationName || p.name, url: p.website || p.sourceUrl, snippet: p.description };
       if (!item.title) return false;
+      if (/^use my location$/i.test(item.title)) return false;
+      if (/yellowpages\.com\/search/i.test(String(item.url || ''))) return false;
       if (isJunkResult(item, intent)) return false;
       const host = String(item.url || '').toLowerCase();
       if (/(chatgpt\.com|openai\.com|claude\.ai|anthropic\.com|gemini\.google|deepai\.org|visitcalifornia\.com|dictionary\.com|fortnite)/i.test(host)
