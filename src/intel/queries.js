@@ -49,13 +49,16 @@ export function planSearchQueries(input = {}) {
     push(focused, 'focused query');
   }
   for (const phrase of phrases.slice(0, 4)) {
-    const trimmed = phrase.trim().replace(/^(solutions serving)\s+/i, '');
-    if (trimmed.split(/\s+/).length > 5) continue;
-    if (/solutions serving/i.test(trimmed)) continue;
-    if (/^solutions\b/i.test(trimmed) && !/receptionist|app|platform|software/i.test(trimmed)) continue;
-    if (/^(the )?competitive landscape\b/i.test(trimmed)) continue;
-    if (/^serving\b/i.test(trimmed)) continue;
-    push(trimmed, 'noun phrase from objective');
+    const pieces = phrase.split(/\s+and\s+/i).map((p) => p.trim()).filter(Boolean);
+    for (const piece of pieces) {
+      const trimmed = piece.replace(/^(solutions serving)\s+/i, '');
+      if (trimmed.split(/\s+/).length > 5) continue;
+      if (/solutions serving/i.test(trimmed)) continue;
+      if (/^solutions\b/i.test(trimmed) && !/receptionist|app|platform|software/i.test(trimmed)) continue;
+      if (/^(the )?competitive landscape\b/i.test(trimmed)) continue;
+      if (/^serving\b/i.test(trimmed)) continue;
+      push(trimmed, 'noun phrase from objective');
+    }
   }
   for (const phrase of phrases.slice(0, 4)) {
     const trimmed = phrase.trim();
