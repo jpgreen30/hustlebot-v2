@@ -171,6 +171,7 @@ export function isJunkResult(item = {}, intent = {}) {
   if (JUNK_HOST.test(host) || /wikipedia|britannica|dictionary/i.test(title)) return true;
   if (VIDEO_HOST.test(host)) return true;
   if (intent.wantCompanies && !intent.wantMedical && CLINICAL_HOST.test(host)) return true;
+  if (intent.wantCompanies && /\b(apk|download .* for android)\b/i.test(String(title))) return true;
   if (intent.wantCompanies && !intent.wantMedical && looksLikeArticle(item) && !looksLikeDirectory(item)) return true;
   return false;
 }
@@ -253,6 +254,9 @@ function matchesQuery(item, query) {
   if (/\bai\b/.test(q) && !/\breceptionist|dental|pregnan/i.test(q)) tokens.push('ai');
   if (!tokens.length) return !isJunkResult(item, discoveryIntent(query));
   const hay = hayForMatch(item);
+  if (/\breceptionist\b/i.test(q) && /\b(virtual receptionist|ai receptionist|phone answering|answering service|after[- ]hours (call|answer)|ai phone)\b/i.test(hay)) {
+    return true;
+  }
   const hits = tokens.filter((token) => hayHasToken(hay, token) || (token.length > 4 && hay.includes(token)));
   if (!hits.length) return false;
   const distinctive = tokens.filter((t) => t.length >= 8 || /^(dental|roofing|receptionist)$/i.test(t));
@@ -475,7 +479,7 @@ export class OrgDiscovery {
 
     if (query && this.search?.search && !forceDown.has('web-search') && !forceDown.has('search')) {
       const planned = planSearchQueries({
-        question: `${query} ${input.objective || ''}`.trim(),
+        question: query,
         query,
         geography: input.location || null,
         slices: (Array.isArray(input.slices) && input.slices.length) ? input.slices : undefined,

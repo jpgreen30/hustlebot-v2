@@ -33,7 +33,18 @@ describe('Day-9 query planner', () => {
     const blob = plan.map((p) => p.query).join(' | ');
     assert.ok(plan.length >= 2);
     assert.match(blob, /dental/i);
+    assert.match(blob, /receptionist/i);
     assert.ok(!/pearl|weave|dentrix/i.test(blob));
+    assert.ok(!/solutions serving dental practices/i.test(blob));
+  });
+
+  test('focused scout query is searched before the full essay', () => {
+    const plan = planSearchQueries({
+      query: 'AI receptionist California',
+      question: 'Research the competitive landscape for AI receptionist solutions serving dental practices in California. Identify providers. Do not contact anyone.'
+    });
+    assert.equal(plan[0].query, 'AI receptionist California');
+    assert.equal(plan[0].reason, 'focused query');
   });
 
   test('splits pregnancy apps and parenting platforms into multiple queries with no competitor list', () => {

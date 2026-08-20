@@ -14,26 +14,42 @@ export const DELEGATION_DEFAULTS = {
 };
 
 export function landscapeSlices(text) {
-  const primary = String(text || '')
+  const cleaned = String(text || '')
     .replace(/^(research|find|discover|rank|compare|map|identify)\s+\d*\s*/i, '')
     .replace(/\bdo not contact anyone\.?/gi, '')
     .replace(/\bidentify\b[^.]*/gi, '')
-    .split(/[.!?]/)[0];
-  const re = /\b((?:ai\s+)?[a-z]{3,}(?:\s+[a-z0-9+]{2,}){0,3}\s+(?:apps?|platforms?|solutions|practices|receptionist))\b/gi;
+    .split(/[.!?]/)[0]
+    .replace(/^(the )?competitive landscape for\s+/i, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
   const out = [];
+  const push = (phrase) => {
+    let p = String(phrase || '').replace(/^(the|a|an|for|and|their|solutions serving)\s+/i, '').trim();
+    p = p.replace(/\ssolutions$/i, '').trim();
+    if (!p || p.split(/\s+/).length > 5) return;
+    if (/^(in|at|from|california|providers|competitive|solutions|practices)\b/i.test(p)) return;
+    if (/solutions serving/i.test(p)) return;
+    if (!out.some((item) => item.toLowerCase() === p.toLowerCase())) out.push(p);
+  };
+
+  const productRe = /\b((?:ai|virtual)\s+receptionist|[a-z]{3,}(?:\s+[a-z0-9+]{2,}){0,2}\s+(?:apps?|platforms?|software|saas|receptionist))\b/gi;
   let m;
-  while ((m = re.exec(primary))) {
-    let phrase = m[1].replace(/^(the|a|an|for|and|their)\s+/i, '').trim();
-    phrase = phrase.replace(/^(competitive landscape for|landscape for)\s+/i, '');
-    if (!phrase || phrase.split(/\s+/).length > 6) continue;
-    if (/^(in|at|from|california|providers|competitive)\b/i.test(phrase)) continue;
-    if (!out.some((item) => item.toLowerCase() === phrase.toLowerCase())) out.push(phrase);
+  while ((m = productRe.exec(cleaned))) push(m[1]);
+
+  const product = out.find((s) => /\b(receptionist|software|saas|apps?|platforms?)\b/i.test(s));
+  const verticalHit = cleaned.match(/\b(dental|medical|legal|hvac|solar|roofing|logistics|insurance)\b/i);
+  if (product && verticalHit && !new RegExp(verticalHit[1], 'i').test(product)) {
+    out.unshift(`${product} ${verticalHit[1]}`.replace(/\s+/g, ' ').trim());
   }
-  if (!out.length) {
-    const fallback = primary.replace(/^(the )?competitive landscape for\s+/i, '').slice(0, 90).trim();
-    if (fallback) out.push(fallback);
+  const ranked = product
+    ? out.filter((s) => /\b(receptionist|software|saas|apps?|platforms?)\b/i.test(s))
+    : out;
+  if (!ranked.length) {
+    const fallback = cleaned.slice(0, 90).trim();
+    if (fallback) ranked.push(fallback);
   }
-  return out.slice(0, 3);
+  return ranked.slice(0, 3);
 }
 
 export function decideDelegation(objective = {}, { catalogue = [] } = {}) {

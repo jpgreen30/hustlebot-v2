@@ -3,7 +3,7 @@
  * verification, market mapping. Not a mega-capability that hides primitives.
  */
 
-import { looksLikeCompany, isJunkResult, discoveryIntent, commercialScore } from '../objective/discover.js';
+import { looksLikeCompany, isJunkResult, discoveryIntent, commercialScore, onTopic } from '../objective/discover.js';
 import { wrapUntrusted } from '../objective/context-pack.js';
 import { extractSlices } from '../objective/quantities.js';
 import {
@@ -135,7 +135,8 @@ export class IntelligenceFabric {
         const intent = discoveryIntent(planned.query, request.question);
         for (const item of searched.results) {
           if (isJunkResult(item, intent) && !looksLikeCompany(item)) continue;
-          if (!looksLikeCompany(item) && !item.url) continue;
+          if (!looksLikeCompany(item)) continue;
+          if (!onTopic(item, planned.query, intent) && !onTopic(item, request.question, intent)) continue;
           const ingested = await this.ingestProspect({
             organizationName: item.title || item.organizationName,
             website: item.url,

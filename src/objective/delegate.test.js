@@ -225,9 +225,12 @@ describe('Day-7 delegation decision', () => {
   test('dental landscape slices are topic phrases not California providers', () => {
     const slices = landscapeSlices('Research the competitive landscape for AI receptionist solutions serving dental practices in California. Identify providers and public pricing. Do not contact anyone.');
     const blob = slices.join(' | ');
-    assert.ok(/receptionist|dental/i.test(blob));
+    assert.ok(/receptionist/i.test(blob));
+    assert.ok(/dental/i.test(blob));
     assert.ok(!/identify providers/i.test(blob));
     assert.ok(!slices.some((s) => /^in california/i.test(s)));
+    assert.ok(!slices.some((s) => /solutions serving/i.test(s)));
+    assert.ok(!slices.some((s) => /pearl|weave|dentrix/i.test(s)));
   });
 });
 

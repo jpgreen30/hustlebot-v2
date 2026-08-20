@@ -99,7 +99,12 @@ export class SwarmOrchestrator {
         catalogue,
         role: 'source-scout',
         mission: 'Select and query public sources. Newly discovered sites stay DISCOVERED, not trusted.',
-        dependsOn: scoutIds
+        dependsOn: scoutIds,
+        scope: {
+          findN: objective.context?.findN,
+          query: usable[0] || objective.context?.query || objective.rawRequest,
+          slices: usable
+        }
       }));
     }
     if (landscape && specialists.length < this.maxWorkersPerObjective && pickCapability(catalogue, ['intelligence.market-map', 'intelligence.verify'])) {
@@ -123,6 +128,9 @@ export class SwarmOrchestrator {
 
   keepOnTopic(findings, objective) {
     const intent = discoveryIntent(objective.rawRequest || '', objective.rawRequest || '');
+    const productQuery = (objective.context?.slices || [])
+      .filter((s) => s && !/^(general|landscape|solutions serving)/i.test(s))
+      .join(' ') || null;
     return (findings || []).filter((p) => {
       const item = { title: p.organizationName || p.name, url: p.website || p.sourceUrl, snippet: p.description };
       if (!item.title) return false;
@@ -135,9 +143,12 @@ export class SwarmOrchestrator {
         return false;
       }
       if (/\.gov(\/|$)/i.test(host) && !/\b(government|campus|\.gov)\b/i.test(objective.rawRequest || '')) return false;
+      if (onTopic(item, objective.rawRequest, intent)) return true;
+      if (productQuery && onTopic(item, productQuery, intent)) return true;
+      if (p.slice && onTopic(item, p.slice, intent)) return true;
       const strict = /\b(receptionist|dental)\b/i.test(objective.rawRequest || '');
-      if (strict) return onTopic(item, objective.rawRequest, intent);
-      return onTopic(item, objective.rawRequest, intent) || looksLikeCompany(item);
+      if (strict) return false;
+      return looksLikeCompany(item);
     });
   }
 
@@ -150,6 +161,9 @@ export class SwarmOrchestrator {
       maxConcurrentWorkers: this.maxConcurrentWorkers,
       maxWorkersPerObjective: this.maxWorkersPerObjective
     };
+    if ((!objective.context.slices || !objective.context.slices.length) && decision.slices?.length) {
+      objective.context.slices = decision.slices;
+    }
     const specialists = (objective.specialists || []).length
       ? objective.specialists
       : this.compose(objective, decision, catalogue);
@@ -514,9 +528,12 @@ export class SwarmOrchestrator {
           specialist.result = emptyResult('partial', { findings: upstream, unknowns: ['source-scout capability not granted'] });
         } else {
           const invocation = await this.invokeGranted(specialist, cap, {
-            question: objective.rawRequest,
+            question: specialist.scope?.query || objective.context?.query || objective.rawRequest,
+            query: specialist.scope?.query || objective.context?.query,
             objective: wrapUntrusted(objective.rawRequest),
-            quantity: specialist.scope?.findN || 10
+            quantity: specialist.scope?.findN || 10,
+            location: objective.context?.location,
+            slices: specialist.scope?.slices || objective.context?.slices || []
           }, context);
           specialist.executions.push({
             capability: cap,
