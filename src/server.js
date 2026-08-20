@@ -91,6 +91,10 @@ import { OutreachEmailProvider } from './outreach/email.js';
 import { SuppressionStore } from './outreach/suppression.js';
 import { CampaignOrchestrator } from './outreach/orchestrate.js';
 import { EmailValidator, PhoneValidator } from './intelligence/validation.js';
+import { MacGyverEngine } from './objective/engine.js';
+import { OrgDiscovery } from './objective/discover.js';
+import { registerObjectiveCapabilities } from './objective/register.js';
+import { matchObjectiveControl, matchObjectiveRun } from './objective/control.js';
 
 class HustleBotServer {
   constructor() {
@@ -158,6 +162,8 @@ class HustleBotServer {
     this.intelligenceEngine = null;
     this.outreachExecutor = null;
     this.outreachEvents = null;
+    this.orgDiscovery = null;
+    this.macgyverEngine = null;
     // Diagnostics
     this.initializationErrors = [];
   }
@@ -660,6 +666,9 @@ class HustleBotServer {
         this.outreachEvents = new OutreachEventLog();
         this.suppressionStore = new SuppressionStore();
         this.outreachEmail = new OutreachEmailProvider();
+        await this.outreachEmail.resolveSender().catch((error) => {
+          logger.warn(`Brevo sender resolve failed: ${error.message}`);
+        });
         this.emailValidator = new EmailValidator();
         this.phoneValidator = new PhoneValidator();
         this.outreachExecutor = new OutreachExecutor({
@@ -711,6 +720,27 @@ class HustleBotServer {
         logger.info(
           `✅ Day-4 intelligence ready (apollo=${this.apolloProvider.isAvailable() ? 'configured' : 'UNAVAILABLE'}, email=${this.outreachEmail.isAvailable() ? 'configured' : 'UNAVAILABLE'})`
         );
+        this.orgDiscovery = new OrgDiscovery({
+          browser: this.browserProvider,
+          search: this.webSearchProvider,
+          spider: this.spiderProvider,
+          acquisition: this.acquisitionEngine
+        });
+        this.macgyverEngine = new MacGyverEngine({
+          registry: this.capabilityRegistry,
+          approvalGate: this.approvalGate,
+          n8n: this.n8nIntegration,
+          email: this.outreachEmail
+        });
+        if (this.capabilityRegistry) {
+          registerObjectiveCapabilities(this.capabilityRegistry, {
+            orgDiscovery: this.orgDiscovery,
+            companyResearcher: this.companyResearcher,
+            contactDiscovery: this.contactDiscovery,
+            macgyverEngine: this.macgyverEngine
+          });
+        }
+        logger.info('✅ Day-5 MacGyver objective engine ready');
       } catch (error) {
         logger.warn('⚠️  Intelligence initialization failed, continuing:', error.message);
         this.initializationErrors.push({ module: 'intelligence', error: error.message });
@@ -1917,6 +1947,69 @@ class HustleBotServer {
       }
     });
 
+    this.app.get('/api/objectives', this.actionAuth, (req, res) => {
+      if (!this.macgyverEngine) return res.status(503).json({ error: 'MacGyver engine not initialized' });
+      res.json({ objectives: this.macgyverEngine.list(Number(req.query.limit || 20)) });
+    });
+
+    this.app.get('/api/objectives/catalogue', this.actionAuth, (req, res) => {
+      if (!this.macgyverEngine) return res.status(503).json({ error: 'MacGyver engine not initialized' });
+      res.json({ catalogue: this.macgyverEngine.catalogue({ availableOnly: req.query.availableOnly !== 'false' }) });
+    });
+
+    this.app.get('/api/objectives/:objectiveId', this.actionAuth, (req, res) => {
+      if (!this.macgyverEngine) return res.status(503).json({ error: 'MacGyver engine not initialized' });
+      const record = this.macgyverEngine.get(req.params.objectiveId);
+      if (!record) return res.status(404).json({ error: `Unknown objective: ${req.params.objectiveId}` });
+      res.json({ objective: record });
+    });
+
+    this.app.post('/api/objectives', this.actionAuth, this.actionRateLimit, async (req, res) => {
+      try {
+        if (!this.macgyverEngine) return res.status(503).json({ error: 'MacGyver engine not initialized' });
+        const body = req.body || {};
+        if (body.wait === false) {
+          const started = this.macgyverEngine.begin(body);
+          started.promise.catch((error) => logger.error(`MacGyver background run failed: ${error.message}`));
+          return res.json({
+            status: 'accepted',
+            objectiveId: started.objective.objectiveId,
+            message: 'Objective started'
+          });
+        }
+        const result = await this.macgyverEngine.run(body);
+        res.json(result);
+      } catch (error) {
+        logger.error(`Objective run error: ${error.message}`);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.post('/api/objectives/:objectiveId/control', this.actionAuth, this.actionRateLimit, async (req, res) => {
+      try {
+        if (!this.macgyverEngine) return res.status(503).json({ error: 'MacGyver engine not initialized' });
+        res.json(await this.macgyverEngine.control({ ...(req.body || {}), objectiveId: req.params.objectiveId }));
+      } catch (error) {
+        logger.error(`Objective control error: ${error.message}`);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.get('/day5', (req, res) => {
+      const objectives = this.macgyverEngine?.list(8) || [];
+      const email = this.outreachEmail?.isAvailable?.() ? 'configured' : 'UNAVAILABLE';
+      res.type('html').send(`<!doctype html>
+<html><head><meta charset="utf-8"><title>HustleBot Day-5</title>
+<style>body{font-family:ui-sans-serif,system-ui;background:#0f1419;color:#e7ecf1;margin:0;padding:32px;max-width:1040px}h1{margin:0 0 8px}code,pre{background:#1b232c;padding:12px;border-radius:8px;display:block;overflow:auto} .ok{color:#7dce82}.bad{color:#ff8b8b}</style>
+</head><body>
+<h1>HustleBot Day-5 MacGyver</h1>
+<p>Plans from the capability catalogue. Discovered prospects are not contacted.</p>
+<p>Email: <span class="${email === 'configured' ? 'ok' : 'bad'}">${email}</span></p>
+<h2>Recent objectives</h2>
+<pre>${JSON.stringify(objectives, null, 2)}</pre>
+</body></html>`);
+    });
+
     this.app.get('/day2', (req, res) => {
       const providers = this.acquisitionEngine?.providerStatus?.() || {};
       const runs = this.acquisitionEngine?.listRuns(5) || [];
@@ -3057,6 +3150,23 @@ class HustleBotServer {
         replyPreview: reply.slice(0, 240)
       });
       return { reply, kind: 'status', snapshot };
+    }
+
+    if (this.macgyverEngine) {
+      const control = matchObjectiveControl(text);
+      if (control) {
+        const result = await this.macgyverEngine.control({ ...control, query: text });
+        return { reply: result.report || 'Objective control updated.', kind: 'objective.control', result };
+      }
+      const run = matchObjectiveRun(text);
+      if (run) {
+        const started = this.macgyverEngine.run({ rawRequest: text, actor: `telegram:${userId}` });
+        started.catch((error) => logger.error(`MacGyver run failed: ${error.message}`));
+        return {
+          reply: 'MacGyver objective started. Ask “what are you working on?” or “show me the plan.” Discovered people will not be contacted.',
+          kind: 'objective.run'
+        };
+      }
     }
 
     if (this.intentDetector && this.actionBridge) {

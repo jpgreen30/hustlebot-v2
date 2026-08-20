@@ -38,4 +38,66 @@ describe('outreach.email provider', () => {
     assert.equal(out.providerMessageId, '<abc@brevo>');
     assert.equal(out.campaignId, 'cmp_1');
   });
+
+  test('resolves a unique verified Brevo sender from GET /v3/senders', async () => {
+    const prevFrom = process.env.OUTREACH_FROM_EMAIL;
+    const prevSender = process.env.SENDER_EMAIL;
+    delete process.env.OUTREACH_FROM_EMAIL;
+    delete process.env.SENDER_EMAIL;
+    const provider = new OutreachEmailProvider({
+      brevoApiKey: 'key',
+      senderEmail: null,
+      fetchImpl: async (url) => {
+        assert.match(String(url), /\/v3\/senders$/);
+        return {
+          ok: true,
+          json: async () => ({ senders: [{ id: 1, email: 'ops@verified.test', name: 'Ops', active: true }] })
+        };
+      }
+    });
+    try {
+      const resolved = await provider.resolveSender();
+      assert.equal(resolved.status, 'ok');
+      assert.equal(resolved.email, 'ops@verified.test');
+      assert.equal(provider.isAvailable(), true);
+      assert.equal(provider.getHealth().state, 'HEALTHY');
+    } finally {
+      if (prevFrom) process.env.OUTREACH_FROM_EMAIL = prevFrom;
+      else delete process.env.OUTREACH_FROM_EMAIL;
+      if (prevSender) process.env.SENDER_EMAIL = prevSender;
+      else delete process.env.SENDER_EMAIL;
+    }
+  });
+
+  test('does not guess when multiple verified senders exist', async () => {
+    const prevFrom = process.env.OUTREACH_FROM_EMAIL;
+    const prevSender = process.env.SENDER_EMAIL;
+    delete process.env.OUTREACH_FROM_EMAIL;
+    delete process.env.SENDER_EMAIL;
+    const provider = new OutreachEmailProvider({
+      brevoApiKey: 'key',
+      senderEmail: null,
+      fetchImpl: async () => ({
+        ok: true,
+        json: async () => ({
+          senders: [
+            { email: 'a@verified.test', active: true },
+            { email: 'b@verified.test', active: true }
+          ]
+        })
+      })
+    });
+    try {
+      const resolved = await provider.resolveSender();
+      assert.equal(resolved.status, 'ambiguous');
+      assert.equal(provider.senderEmail, null);
+      assert.equal(provider.isAvailable(), false);
+    } finally {
+      if (prevFrom) process.env.OUTREACH_FROM_EMAIL = prevFrom;
+      else delete process.env.OUTREACH_FROM_EMAIL;
+      if (prevSender) process.env.SENDER_EMAIL = prevSender;
+      else delete process.env.SENDER_EMAIL;
+    }
+  });
 });
+
