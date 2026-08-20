@@ -116,7 +116,8 @@ export function planObjective(objective, catalogue = []) {
       reasonSelected: reasonFor(catalogue, researchId, 'company research')
     }));
 
-    const landscape = /(apps?\b|platforms?\b|competitive landscape|parenting)/i.test(objective.rawRequest || '');
+    const landscape = /(apps?\b|platforms?\b|competitive landscape|parenting|receptionist)/i.test(objective.rawRequest || '');
+    const wantsBuyerQualify = /qentrax|lead buyer|affiliate summit/i.test(objective.rawRequest || '');
 
     let lastRef = 'research.prospects';
     let lastDepends = ['research'];
@@ -136,7 +137,7 @@ export function planObjective(objective, catalogue = []) {
       lastRef = 'contacts.prospects';
       lastDepends = ['contacts'];
 
-      if (catalogueHas(catalogue, 'prospect.qualify')) {
+      if (wantsBuyerQualify && catalogueHas(catalogue, 'prospect.qualify')) {
         nodes.push(node('qualify', 'prospect.qualify', {
           description: 'Qualify prospects against the profile',
           dependsOn: ['contacts'],

@@ -51,6 +51,11 @@ export function planSearchQueries(input = {}) {
       push(trimmed.replace(/apps?$/i, 'tracker'), 'adjacent product noun');
     }
   }
+  if (wantProducts && /pregnan/i.test(question)) {
+    push('pregnancy tracker app', 'category expansion from pregnancy apps');
+    push('parenting app', 'category expansion from parenting platforms');
+    push('baby tracker app', 'category expansion from pregnancy apps');
+  }
 
   for (const slice of slices.slice(0, 4)) {
     const loc = geography ? `${slice} ${geography}` : slice;

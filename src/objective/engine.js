@@ -892,7 +892,9 @@ export class MacGyverEngine {
   async control(input = {}) {
     const matched = typeof input === 'string'
       ? matchObjectiveControl(input)
-      : (input?.action ? { ...input, query: input.query || input.action } : matchObjectiveControl(input.query || input.action || ''));
+      : (input?.action && !input?.query && !input?.text && !input?.message
+        ? { ...input, query: input.query || input.action }
+        : matchObjectiveControl(input.query || input.action || input.text || input.message || ''));
     if (matched && !matched.captured) {
       const intelMatch = matchIntelControl(matched.query || '');
       if (intelMatch?.captured) matched.captured = intelMatch.captured;

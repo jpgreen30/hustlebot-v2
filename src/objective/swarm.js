@@ -19,6 +19,7 @@ import {
 import { packContext, wrapUntrusted } from './context-pack.js';
 import { arbitrate } from './arbitrate.js';
 import { shouldRunCritic, critique } from './critic.js';
+import { looksLikeCompany, isJunkResult, discoveryIntent } from './discover.js';
 
 export class SwarmOrchestrator {
   constructor(engine, config = {}) {
@@ -30,22 +31,43 @@ export class SwarmOrchestrator {
   }
 
   compose(objective, decision, catalogue) {
-    const slices = (decision.slices || []).filter(Boolean).slice(0, 3);
-    const usable = slices.length ? slices : [objective.context?.industry || 'general'];
-    const perSlice = Math.max(3, Math.ceil(Number(objective.context?.findN || 10) / usable.length));
+    const slices = (decision.slices || []).filter((s) => s && !/^(general|landscape)$/i.test(s)).slice(0, 3);
+    const usable = slices.length ? slices : [];
+    const perSlice = Math.max(3, Math.ceil(Number(objective.context?.findN || 10) / Math.max(usable.length, 1)));
     const specialists = [];
     const scoutCap = Math.max(1, this.maxWorkersPerObjective - 2);
 
-    for (const slice of usable) {
-      if (specialists.length >= scoutCap) break;
+    if (!usable.length) {
       specialists.push(createSpecialist({
         objective,
         catalogue,
         role: 'scout',
-        slice,
-        mission: `Discover public ${slice} organizations${objective.context?.location ? ` in ${objective.context.location}` : ''}. Do not contact anyone.`,
-        scope: { findN: perSlice, industry: slice, location: objective.context?.location }
+        slice: null,
+        mission: 'Discover public organizations matching the objective. Do not contact anyone.',
+        scope: {
+          findN: Number(objective.context?.findN || 10),
+          query: objective.context?.query || objective.rawRequest,
+          location: objective.context?.location,
+          industry: objective.context?.industry
+        }
       }));
+    } else {
+      for (const slice of usable) {
+        if (specialists.length >= scoutCap) break;
+        specialists.push(createSpecialist({
+          objective,
+          catalogue,
+          role: 'scout',
+          slice,
+          mission: `Discover public ${slice} organizations${objective.context?.location ? ` in ${objective.context.location}` : ''} matching the objective. Do not contact anyone.`,
+          scope: {
+            findN: perSlice,
+            industry: slice,
+            location: objective.context?.location,
+            query: `${slice} ${objective.context?.location || ''}`.trim()
+          }
+        }));
+      }
     }
 
     const scoutIds = specialists.map((s) => s.specialistId);
@@ -378,10 +400,15 @@ export class SwarmOrchestrator {
           specialist.completedAt = new Date().toISOString();
           return;
         }
+        const slice = specialist.slice || specialist.scope?.industry;
+        const bogusSlice = !slice || /^(general|landscape)$/i.test(slice);
+        const query = bogusSlice
+          ? (specialist.scope?.query || objective.context?.query || objective.rawRequest)
+          : `${slice} ${specialist.scope?.location || objective.context?.location || ''}`.trim();
         const invocation = await this.invokeGranted(specialist, cap, {
-          query: `${specialist.scope?.location || ''} ${specialist.slice || specialist.scope?.industry || ''} companies`.trim(),
-          industry: specialist.slice || specialist.scope?.industry,
-          location: specialist.scope?.location,
+          query,
+          industry: bogusSlice ? (objective.context?.industry || null) : slice,
+          location: specialist.scope?.location || objective.context?.location,
           maxOrganizations: specialist.scope?.findN || 5,
           objective: wrapUntrusted(objective.rawRequest)
         }, context);
@@ -393,10 +420,16 @@ export class SwarmOrchestrator {
           cost: invocation.cost || 0
         });
         objective.cost = (objective.cost || 0) + (invocation.cost || 0);
+        const intent = discoveryIntent(query, objective.rawRequest);
         const findings = (invocation.result?.prospects || invocation.result?.organizations || []).map((p) => ({
           ...p,
           slice: specialist.slice
-        }));
+        })).filter((p) => {
+          const item = { title: p.organizationName || p.name, url: p.website || p.sourceUrl, snippet: p.description };
+          if (!item.title) return false;
+          if (isJunkResult(item, intent)) return false;
+          return looksLikeCompany(item) || Boolean(p.domain && p.organizationName);
+        });
         specialist.result = emptyResult(findings.length ? 'ok' : 'partial', {
           findings,
           evidence: findings.map((p) => ({ name: p.organizationName, website: p.website, source: cap })),

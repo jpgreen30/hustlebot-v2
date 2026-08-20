@@ -292,6 +292,7 @@ function toProspect(record, sourceUrl, provider) {
   const name = record.organizationName || record.name || record.title || null;
   const website = normalizeUrl(record.website || record.url || record.link || null);
   if (!name && !website) return null;
+  if (looksLikeSeoServiceTitle(name)) return null;
   if (isJunkResult({ url: website || sourceUrl, title: name }, discoveryIntent(name))) return null;
   return {
     organizationName: name || website,

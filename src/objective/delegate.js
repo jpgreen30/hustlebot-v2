@@ -53,11 +53,15 @@ export function decideDelegation(objective = {}, { catalogue = [] } = {}) {
   }
 
   if (/competitive landscape|strategic opportunit/i.test(text)) {
-    const inferred = slices.length ? slices : ['landscape'];
+    const inferred = slices.length
+      ? slices
+      : (text.match(/([a-z0-9][a-z0-9&.'/-]*(?:\s+[a-z0-9][a-z0-9&.'/-]*){0,4}\s+(?:apps?|platforms?|solutions|practices|providers|receptionist))/gi) || [])
+        .map((p) => p.trim())
+        .slice(0, 3);
     return {
       delegate: true,
       reason: 'Competitive landscape is independent category research plus synthesis.',
-      estimatedWorkers: Math.min(Math.max(inferred.length, 2) + 2, DELEGATION_DEFAULTS.maxWorkersPerObjective),
+      estimatedWorkers: Math.min(Math.max(inferred.length, 1) + 2, DELEGATION_DEFAULTS.maxWorkersPerObjective),
       estimatedBenefit: 'separate category scouts before a single synthesis',
       pattern: 'competitive-landscape',
       slices: inferred
