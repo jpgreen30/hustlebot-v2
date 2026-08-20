@@ -80,7 +80,7 @@ import { ProspectEnricher } from './acquisition/enrich.js';
 import { registerAcquisitionCapabilities } from './acquisition/register.js';
 import { BrowserRenderProvider } from './providers/browser.js';
 import { ApolloProvider } from './providers/apollo.js';
-import { IntelligenceEngine } from './intelligence/engine.js';
+import { IntelligenceEngine, handleCampaignControlHttp } from './intelligence/engine.js';
 import { CompanyResearcher } from './intelligence/research.js';
 import { ContactDiscovery } from './intelligence/contacts.js';
 import { EnrichmentRouter } from './intelligence/enrichment.js';
@@ -1870,10 +1870,7 @@ class HustleBotServer {
 
     this.app.post('/api/campaign/control', this.actionAuth, this.actionRateLimit, async (req, res) => {
       try {
-        if (!this.intelligenceEngine) {
-          return res.status(503).json({ error: 'Intelligence engine not initialized' });
-        }
-        res.json(this.intelligenceEngine.control(req.body || {}));
+        await handleCampaignControlHttp(this.intelligenceEngine, req, res);
       } catch (error) {
         logger.error(`Campaign control error: ${error.message}`);
         res.status(500).json({ error: error.message });
