@@ -3,7 +3,7 @@ import { extractProspectsFromPage } from '../acquisition/extract.js';
 import { mapLimit } from './util.js';
 
 const AGGREGATOR_HOST = /(^|\.)(yelp|angi|thumbtack|bbb|mapquest|forbes|bing|google|duckduckgo|homeguide|ontoplist|expertise|yellowpages|superpages|manta|hotfrog)\.com$|(^|\.)(roof\.info)$/i;
-const JUNK_HOST = /(^|\.)(wikipedia\.org|britannica\.com|latimes\.com|nytimes\.com|washingtonpost\.com|cnn\.com|bbc\.com|merriam-webster\.com|spanishdict\.com|dictionary\.cambridge\.org|collinsdictionary\.com|definitions\.net|wikihow\.com|quora\.com|imdb\.com)$/i;
+const JUNK_HOST = /(^|\.)(wikipedia\.org|britannica\.com|latimes\.com|nytimes\.com|washingtonpost\.com|cnn\.com|bbc\.com|merriam-webster\.com|spanishdict\.com|dictionary\.cambridge\.org|collinsdictionary\.com|definitions\.net|wikihow\.com|quora\.com|imdb\.com|abbreviationfinder\.org|acronymfinder\.com)$/i;
 const CLINICAL_HOST = /(^|\.)(clevelandclinic\.org|cdc\.gov|mayoclinic\.org|nih\.gov|medlineplus\.gov|webmd\.com|healthline\.com|kidshealth\.org|childmind\.org|apa\.org|who\.int|nhs\.uk)$/i;
 const VIDEO_HOST = /(^|\.)(youtube\.com|youtu\.be|vimeo\.com|dailymotion\.com)$/i;
 const WEAK_QUERY_TOKEN = new Set([
@@ -46,10 +46,11 @@ function looksLikeArticle(item = {}) {
   const title = String(item.title || item.organizationName || item.name || '');
   const path = pathOf(url);
   if (/\/(wiki|health\/articles?|health\/diseases|topics?|encyclopedia|learn\/|article\/|news\/|blog\/|guides?\/)/i.test(path)) return true;
+  if (/^\/(pregnancy|parenting|baby|health)(\/|$)/i.test(path) && !/\b(app|apps|platform|tracker)\b/i.test(title)) return true;
   if (/:\s*(medlineplus|cleveland clinic|mayo clinic|cdc|wikipedia|britannica)\b/i.test(title)) return true;
   if (/\b(symptoms|treatment|diagnosis|what is|overview|fact sheet)\b/i.test(title) && CLINICAL_HOST.test(hostOf(url))) return true;
   if (/^\d+\s+(best|top)\b/i.test(title)) return true;
-  if (/\b(what is|definition,|types, methods|beginner's guide|how to (start|do))\b/i.test(title)) return true;
+  if (/\b(what is|definition,|types, methods|beginner's guide|how to (start|do)|preparing for a baby|pregnancy information)\b/i.test(title)) return true;
   if (/\bweek[- ]by[- ]week\b|\bsymptoms\s*(&|and)\s*signs\b|\bbaby development\b|\btrimester (guide|calendar)\b/i.test(title)) return true;
   if (/week-by-week|symptoms-and-signs|baby-development/i.test(path)) return true;
   if (/(researchgate\.net|scribbr\.com|questionpro\.com|researchmethod\.net|ideascale\.com)$/i.test(hostOf(url))) return true;
@@ -310,28 +311,36 @@ export class OrgDiscovery {
         const extra = `${compact} companies products official site`.replace(/\s+/g, ' ').trim();
         if (extra && extra !== query) queries.push(extra);
       }
-      const mergedResults = [];
+      const primaryResults = [];
+      const extraResults = [];
       const seenUrls = new Set();
       let lastSearched = null;
-      for (const q of queries) {
+      for (let i = 0; i < queries.length; i += 1) {
+        const q = queries[i];
         const searched = await this.search.search(q, { limit: Math.max(max, 12) });
         lastSearched = searched;
         providers.push(searched.provider || 'web-search');
+        const bucket = i === 0 ? primaryResults : extraResults;
         if (searched.status === 'ok' && searched.results?.length) {
           for (const item of searched.results) {
             const url = String(item.url || '').toLowerCase();
             if (!url || seenUrls.has(url)) continue;
             seenUrls.add(url);
-            mergedResults.push(item);
+            bucket.push(item);
           }
         } else {
           errors.push({ provider: searched.provider || 'web-search', error: searched.error || 'no results', query: q });
         }
       }
+      const mergedResults = [...primaryResults, ...extraResults];
       if (mergedResults.length && lastSearched) {
+        const extraSet = new Set(extraResults.map((item) => String(item.url || '').toLowerCase()));
         const pool = mergedResults.filter((item) => {
           if (isJunkResult(item, intent)) return false;
-          return matchesQuery(item, query) || looksLikeCompany(item) || looksLikeDirectory(item);
+          if (extraSet.has(String(item.url || '').toLowerCase())) {
+            return looksLikeCompany(item) || looksLikeDirectory(item);
+          }
+          return matchesQuery(item, query);
         });
         const direct = [];
         const directories = [];

@@ -142,6 +142,7 @@ describe('OrgDiscovery search-shaped routing', () => {
             { title: 'Pregnancy - Wikipedia', url: 'https://en.wikipedia.org/wiki/Pregnancy' },
             { title: 'Best pregnancy apps YouTube', url: 'https://www.youtube.com/watch?v=abc123', snippet: 'Video roundup' },
             { title: 'Pregnancy week-by-week calendar', url: 'https://www.babycenter.com/pregnancy/week-by-week', snippet: 'Symptoms and signs by week' },
+            { title: 'Pregnancy Information: Health, Your Body, Preparing for a Baby', url: 'https://www.whattoexpect.com/pregnancy', snippet: 'Pregnancy information' },
             { title: 'Peanut App', url: 'https://www.peanut-app.io', snippet: 'Social network app for women and mothers' },
             { title: 'The Bump', url: 'https://www.thebump.com', snippet: 'Pregnancy and baby tracking app' },
             { title: 'Ovia Health', url: 'https://www.oviahealth.com', snippet: 'Pregnancy tracker app and platform' },
@@ -158,7 +159,32 @@ describe('OrgDiscovery search-shaped routing', () => {
     assert.equal(out.status, 'ok');
     const names = out.prospects.map((p) => p.organizationName).join(' ');
     assert.match(names, /Peanut|Ovia|Bump|What to Expect/i);
-    assert.ok(!out.prospects.some((p) => /cleveland|cdc|wikipedia|youtube|week-by-week/i.test(`${p.organizationName} ${p.website}`)));
+    assert.ok(!out.prospects.some((p) => /cleveland|cdc|wikipedia|youtube|week-by-week|Preparing for a Baby|\/pregnancy$/i.test(`${p.organizationName} ${p.website}`)));
+  });
+
+  test('roofing search does not keep dictionary or abbreviation hits that fail the query', async () => {
+    const discovery = new OrgDiscovery({
+      search: {
+        search: async () => ({
+          status: 'ok',
+          provider: 'bing',
+          results: [
+            { title: 'What does LOS mean? - Abbreviation Finder', url: 'https://www.abbreviationfinder.org/acronyms/los.html', snippet: 'LOS stands for Los' },
+            { title: 'HomeRepairly Roofing', url: 'https://www.homerepairly.com', snippet: 'Los Angeles roofing company' },
+            { title: 'Dorantes Construction', url: 'https://dorantesconstruction.com', snippet: 'Roofing contractor in Los Angeles' }
+          ]
+        })
+      }
+    });
+    const out = await discovery.discover({
+      query: 'Los Angeles roofing companies',
+      objective: 'Research 3 Los Angeles roofing companies, rank them, do not contact anyone.',
+      maxOrganizations: 5
+    });
+    assert.equal(out.status, 'ok');
+    const names = out.prospects.map((p) => p.organizationName).join(' ');
+    assert.match(names, /HomeRepairly|Dorantes/i);
+    assert.ok(!out.prospects.some((p) => /abbreviation|los mean/i.test(`${p.organizationName} ${p.website}`)));
   });
 });
 

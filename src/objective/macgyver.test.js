@@ -187,6 +187,18 @@ function macgyverRegistry({ failDiscoverOnce = false } = {}) {
     isAvailable: () => true
   });
   r.register({
+    capabilityId: 'mcp.hustlebot-local.public.compare',
+    name: 'compare',
+    provider: 'mcp:hustlebot-local',
+    handler: async (input) => ({
+      status: 'ok',
+      comparison: `Compared ${(input.organizations || input.prospects || []).length} organizations`,
+      provider: 'mcp:hustlebot-local',
+      fabricated: false
+    }),
+    isAvailable: () => true
+  });
+  r.register({
     capabilityId: 'campaign.prepare',
     name: 'mega',
     provider: 'intelligence-engine',
@@ -495,6 +507,8 @@ describe('Day-6 MacGyver logistics + fabric + router', () => {
       assert.equal(out.plan.pattern, 'research_rank_search');
       assert.ok(!out.plan.nodes.some((n) => /logistics/i.test(n.capabilityId) || n.capabilityId === 'campaign.prepare'));
       assert.ok(out.result.top.some((p) => /3PL|Freight|Distribution/i.test(p.organizationName)));
+      assert.ok(out.plan.nodes.some((n) => /public\.compare/.test(n.capabilityId)));
+      assert.match(String(out.result.comparison || ''), /Compared/);
       assert.equal(out.contacted, false);
     } finally {
       rmSync(dir, { recursive: true, force: true });

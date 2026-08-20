@@ -477,7 +477,8 @@ export class MacGyverEngine {
       }
     }
 
-    const reportNode = outputs.compare || outputs.report || outputs.score || outputs.qualify || outputs.contacts || outputs.research || outputs.discover || outputs.lookup;
+    const reportNode = outputs.report || outputs.score || outputs.qualify || outputs.contacts || outputs.research || outputs.discover || outputs.lookup;
+    const compareNode = outputs.compare;
     if (plan.pattern === 'direct_capability' || outputs.lookup) {
       const packed = outputs.lookup || {};
       const lookup = packed.result && typeof packed.result === 'object' ? packed.result : packed;
@@ -496,11 +497,12 @@ export class MacGyverEngine {
       };
     } else {
       const prospects = reportNode?.top || reportNode?.prospects || [];
+      const comparison = compareNode?.comparison || compareNode?.result || reportNode?.comparison || null;
       objective.result = {
         prospects,
         top: (reportNode?.top || prospects).slice(0, objective.context?.topN || 5),
-        report: reportNode?.report || reportNode?.comparison || this.formatResult(objective, prospects),
-        comparison: reportNode?.comparison || null,
+        report: reportNode?.report || this.formatResult(objective, prospects),
+        comparison,
         providers: [...new Set(objective.executions.map((e) => e.provider).filter(Boolean))]
       };
     }
