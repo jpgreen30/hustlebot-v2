@@ -133,6 +133,8 @@ export class SwarmOrchestrator {
         return false;
       }
       if (/\.gov(\/|$)/i.test(host) && !/\b(government|campus|\.gov)\b/i.test(objective.rawRequest || '')) return false;
+      const strict = /\b(receptionist|dental)\b/i.test(objective.rawRequest || '');
+      if (strict) return onTopic(item, objective.rawRequest, intent);
       return onTopic(item, objective.rawRequest, intent) || looksLikeCompany(item);
     });
   }
@@ -243,7 +245,7 @@ export class SwarmOrchestrator {
           await this.runSpecialist(repair, objective, catalogue, input, byId);
         }
         const repaired = repair.result?.findings || [];
-        findings = arbitrate([...workerPackets, { specialistId: repair.specialistId, result: repair.result }]).findings;
+        findings = this.keepOnTopic(arbitrate([...workerPackets, { specialistId: repair.specialistId, result: repair.result }]).findings, objective);
         objective.repair = { specialistId: repair.specialistId, gap: criticResult.recommendRepair, added: repaired.length };
         this.engine.persist(objective);
       }
@@ -256,7 +258,10 @@ export class SwarmOrchestrator {
     }
 
     const topN = Number(objective.context?.topN || 5);
-    const top = (synthesizer?.result?.findings || findings).slice(0, topN);
+    findings = this.keepOnTopic(findings, objective);
+    const synthesized = this.keepOnTopic(synthesizer?.result?.findings || [], objective);
+    const ranked = (synthesized.length ? synthesized : findings);
+    const top = ranked.slice(0, topN);
     const comparison = synthesizer?.result?.recommendations?.[0] || synthesizer?.result?.comparison || null;
     objective.result = {
       prospects: findings,
