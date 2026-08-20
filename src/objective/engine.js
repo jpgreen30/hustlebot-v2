@@ -246,6 +246,7 @@ export class MacGyverEngine {
           };
           if (recovery.capabilityId) node.capabilityId = recovery.capabilityId;
           if (recovery.provider) retryContext.provider = recovery.provider;
+          else if (recovery.capabilityId) delete retryContext.provider;
           if (recovery.action === 'alternate-provider' && recovery.provider === 'apollo') {
             resolvedInputs = { ...resolvedInputs, skipApollo: false, enrichPeople: 1 };
           }
@@ -297,7 +298,9 @@ export class MacGyverEngine {
       providers: [...new Set(objective.executions.map((e) => e.provider).filter(Boolean))]
     };
     const failed = (plan.nodes || []).filter((n) => n.status === 'failed');
-    objective.status = failed.length ? OBJECTIVE_STATUS.FAILED : OBJECTIVE_STATUS.COMPLETED;
+    const discoverDone = completed.has('discover') || plan.pattern === 'authorized_test';
+    objective.status = (failed.length || !discoverDone) ? OBJECTIVE_STATUS.FAILED : OBJECTIVE_STATUS.COMPLETED;
+    if (!discoverDone && !objective.error) objective.error = 'discovery did not complete';
     if (failed.length) objective.error = failed.map((n) => `${n.id}: ${n.error}`).join('; ');
     objective.contacted = false;
     this.persist(objective);

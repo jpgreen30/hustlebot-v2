@@ -45,4 +45,23 @@ describe('extract', () => {
     assert.equal(found[0].contact.email, null);
     assert.deepEqual(extractEmails('no addresses here'), []);
   });
+
+  test('extracts public directory business-name listings', () => {
+    const found = extractProspectsFromPage({
+      url: 'https://www.yellowpages.com/los-angeles-ca/roofing-contractors',
+      html: `
+        <div>
+          <a class="business-name" href="/los-angeles-ca/mip/lang-roofing-inc">Lang Roofing Inc</a>
+          <a class="business-name" href="/los-angeles-ca/mip/fava-roofing">Fava Roofing</a>
+        </div>
+      `,
+      markdown: '',
+      metadata: { title: 'Roofing Contractors' },
+      provider: 'custom-spider',
+      sourceType: 'directory'
+    });
+    const names = found.map((p) => p.organizationName);
+    assert.ok(names.includes('Lang Roofing Inc'));
+    assert.ok(names.includes('Fava Roofing'));
+  });
 });

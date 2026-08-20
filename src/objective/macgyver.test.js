@@ -210,6 +210,25 @@ describe('MacGyver observer + recovery', () => {
     assert.equal(obs.status, OBSERVATION.PARTIAL);
   });
 
+  test('zero organizations is a retryable discovery failure, not success', () => {
+    const obs = observeNodeResult(
+      { capabilityId: 'org.discover', id: 'discover' },
+      { success: true, result: { status: 'ok', prospects: [] } }
+    );
+    assert.equal(obs.status, OBSERVATION.RETRYABLE_FAILURE);
+  });
+
+  test('search-shaped recovery does not jump to web.scrape', () => {
+    const catalogue = inspectCatalogue(macgyverRegistry());
+    const action = recoveryAction(
+      { id: 'discover', capabilityId: 'org.discover', provider: 'macgyver' },
+      { status: OBSERVATION.PROVIDER_FAILURE, reason: 'search empty' },
+      { catalogue, retries: 0 }
+    );
+    assert.ok(['retry', 'switch-provider'].includes(action.action));
+    assert.notEqual(action.capabilityId, 'web.scrape');
+  });
+
   test('preferred provider failure selects a legitimate alternative', () => {
     const catalogue = inspectCatalogue(macgyverRegistry());
     const action = recoveryAction(

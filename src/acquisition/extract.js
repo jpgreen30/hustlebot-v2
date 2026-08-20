@@ -123,7 +123,13 @@ function cardsFromHtml(html, page) {
     '[class*="partner"]',
     '[data-exhibitor]',
     '#mw-pages li',
-    '.mw-category li'
+    '.mw-category li',
+    'a.business-name',
+    '[class*="business-name"]',
+    '[class*="listing-name"]',
+    '.row-listing',
+    '.v-card',
+    '.srp-listing'
   ];
 
   const seen = new Set();
@@ -133,13 +139,17 @@ function cardsFromHtml(html, page) {
       const heading = normalizeOrganizationName(
         node.find('h1,h2,h3,h4,.name,[class*="name"]').first().text()
         || node.find('a').first().text()
+        || node.text()
       );
       if (!heading || isGenericName(heading)) return;
       if (heading.split(' ').length > 12) return;
       const blob = node.text().replace(/\s+/g, ' ').trim();
       if (blob.length > 1200) return;
-      const href = resolveHref(node.find('a[href]').first().attr('href'), page.url);
-      const listingSelector = /exhibitor|sponsor|vendor|partner|mw-pages|mw-category/.test(selector);
+      const href = resolveHref(
+        node.find('a[href]').first().attr('href') || (node.is('a') ? node.attr('href') : null),
+        page.url
+      );
+      const listingSelector = /exhibitor|sponsor|vendor|partner|mw-pages|mw-category|business-name|listing-name|row-listing|v-card|srp-listing/.test(selector);
       if (!listingSelector && !href) return;
       const key = heading.toLowerCase();
       if (seen.has(key)) return;

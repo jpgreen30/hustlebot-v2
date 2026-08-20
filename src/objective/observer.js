@@ -39,7 +39,7 @@ export function observeNodeResult(node, invocation) {
   if (node.capabilityId === 'org.discover' || node.id === 'discover') {
     const orgs = result.prospects || result.organizations || result.records || result.results || [];
     if (!Array.isArray(orgs) || orgs.length === 0) {
-      return { status: OBSERVATION.PARTIAL, reason: 'discovery returned zero organizations' };
+      return { status: OBSERVATION.RETRYABLE_FAILURE, reason: 'discovery returned zero organizations' };
     }
   }
   if (node.capabilityId?.startsWith('contact.discover')) {

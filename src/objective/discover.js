@@ -1,5 +1,50 @@
 import { normalizeDomain, normalizeUrl } from '../acquisition/normalize.js';
+import { extractProspectsFromPage } from '../acquisition/extract.js';
 import { mapLimit } from './util.js';
+
+const AGGREGATOR_HOST = /(^|\.)(yelp|angi|thumbtack|bbb|mapquest|forbes|bing|google|duckduckgo|homeguide|ontoplist|expertise|yellowpages|superpages|manta|hotfrog)\.com$|(^|\.)(roof\.info)$/i;
+
+function hostOf(url) {
+  try {
+    return new URL(url).hostname.replace(/^www\./, '').toLowerCase();
+  } catch {
+    return '';
+  }
+}
+
+function isAggregator(url) {
+  const host = hostOf(url);
+  return !host ? false : AGGREGATOR_HOST.test(host);
+}
+
+function looksLikeDirectory(item = {}) {
+  if (isAggregator(item.url)) return true;
+  const hay = `${item.title || ''} ${item.snippet || ''} ${item.url || ''}`.toLowerCase();
+  return /(best |top \d+|directory|companylist|contractors in|list of|near me)/.test(hay);
+}
+
+function queryTokens(query) {
+  return String(query || '')
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((token) => token.length > 4);
+}
+
+function matchesQuery(item, query) {
+  const tokens = queryTokens(query);
+  if (!tokens.length) return true;
+  const hay = `${item.title || ''} ${item.url || ''} ${item.snippet || ''}`.toLowerCase();
+  return tokens.some((token) => hay.includes(token));
+}
+
+function scrapePriority(item = {}) {
+  const url = String(item.url || '');
+  if (/yellowpages\.com\/.+\/.+/i.test(url)) return 100;
+  if (/ontoplist\.com/i.test(url)) return 80;
+  if (/\/(contractors|companylist|directory)\b/i.test(url)) return 70;
+  if (/yelp\.com\/search|forbes\.com|latimes\.com/i.test(url)) return 5;
+  return 40;
+}
 
 function toProspect(record, sourceUrl, provider) {
   const name = record.organizationName || record.name || record.title || null;
@@ -11,8 +56,22 @@ function toProspect(record, sourceUrl, provider) {
     domain: normalizeDomain(record.domain || website),
     description: record.description || record.snippet || null,
     sourceUrl: record.sourceUrl || sourceUrl || website,
-    provenance: { provider, extractionMethod: 'org.discover' }
+    provenance: { provider, extractionMethod: record.provenance?.extractionMethod || 'org.discover' }
   };
+}
+
+function mergeProspects(list, max) {
+  const out = [];
+  const seen = new Set();
+  for (const prospect of list) {
+    if (!prospect) continue;
+    const key = (prospect.domain || prospect.organizationName || '').toLowerCase().trim();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(prospect);
+    if (out.length >= max) break;
+  }
+  return out;
 }
 
 export class OrgDiscovery {
@@ -54,12 +113,19 @@ export class OrgDiscovery {
       const page = await this.spider.scrape(sourceUrl, { timeout: 12000 });
       providers.push('custom-spider');
       if (page.status === 'ok') {
-        const prospects = [];
-        if (page.title) prospects.push(toProspect({ name: page.title, website: sourceUrl }, sourceUrl, 'custom-spider'));
+        const extracted = extractProspectsFromPage({
+          ...page,
+          url: page.finalUrl || sourceUrl,
+          sourceType: 'directory'
+        });
+        const prospects = (extracted.length ? extracted : [{ name: page.title, website: sourceUrl }])
+          .map((r) => toProspect(r, sourceUrl, 'custom-spider'))
+          .filter(Boolean)
+          .slice(0, max);
         if (prospects.length) {
           return {
             status: 'ok',
-            prospects: prospects.filter(Boolean).slice(0, max),
+            prospects,
             providers,
             reasonSelected: 'Used custom spider because browser/directory extract did not return records',
             fabricated: false
@@ -70,26 +136,65 @@ export class OrgDiscovery {
     }
 
     if (query && this.search?.search && !forceDown.has('web-search') && !forceDown.has('search')) {
-      const searched = await this.search.search(query, { limit: max });
+      const searched = await this.search.search(query, { limit: Math.max(max, 12) });
       providers.push(searched.provider || 'web-search');
       if (searched.status === 'ok' && searched.results?.length) {
-        const prospects = searched.results
-          .map((item) => toProspect(item, item.url, searched.provider))
-          .filter(Boolean)
-          .slice(0, max);
-        return {
-          status: 'ok',
-          prospects,
-          providers,
-          reasonSelected: `Used ${searched.provider || 'web-search'} because the objective is a search (no directory URL required)`,
-          query,
-          fabricated: false
-        };
+        const relevant = searched.results.filter((item) => matchesQuery(item, query));
+        const pool = relevant.length ? relevant : searched.results;
+        const direct = [];
+        const directories = [];
+        for (const item of pool) {
+          if (looksLikeDirectory(item)) directories.push(item);
+          else {
+            const prospect = toProspect(item, item.url, searched.provider);
+            if (prospect && !isAggregator(prospect.website)) direct.push(prospect);
+          }
+        }
+        directories.sort((a, b) => scrapePriority(b) - scrapePriority(a));
+
+        const extracted = [];
+        const canSpider = this.spider?.scrape && !forceDown.has('custom-spider') && !forceDown.has('spider');
+        if (direct.length < max && canSpider) {
+          for (const dir of directories.slice(0, 3)) {
+            if (direct.length + extracted.length >= max) break;
+            const page = await this.spider.scrape(dir.url, { timeout: 15000 });
+            providers.push(page.provider || 'custom-spider');
+            if (page.status !== 'ok') {
+              errors.push({ provider: 'custom-spider', error: page.error || page.status, url: dir.url });
+              continue;
+            }
+            const found = extractProspectsFromPage({
+              ...page,
+              url: page.finalUrl || dir.url,
+              sourceType: 'directory'
+            });
+            for (const record of found) {
+              const prospect = toProspect(record, record.sourceUrl || dir.url, page.provider || 'custom-spider');
+              if (prospect) extracted.push(prospect);
+            }
+          }
+        }
+
+        const prospects = mergeProspects([...direct, ...extracted], max);
+        if (prospects.length) {
+          return {
+            status: 'ok',
+            prospects,
+            providers,
+            reasonSelected: extracted.length
+              ? `Used ${searched.provider || 'web-search'} then extracted organizations from public directory pages`
+              : `Used ${searched.provider || 'web-search'} because the objective is a search (no directory URL required)`,
+            query,
+            fabricated: false
+          };
+        }
+        errors.push({ provider: searched.provider || 'web-search', error: 'search results did not yield organizations' });
+      } else {
+        errors.push({ provider: searched.provider || 'web-search', error: searched.error || 'no results' });
       }
-      errors.push({ provider: searched.provider || 'web-search', error: searched.error || 'no results' });
     }
 
-    if (this.acquisition?.run && !forceDown.has('acquisition')) {
+    if (this.acquisition?.run && sourceUrl && !forceDown.has('acquisition')) {
       const run = await this.acquisition.run({
         objective: input.objective || query,
         sourceUrl,
@@ -115,6 +220,7 @@ export class OrgDiscovery {
       prospects: [],
       providers,
       errors,
+      error: errors.map((e) => e.error).filter(Boolean).join('; ') || 'no organizations discovered',
       reasonSelected: 'No discovery provider returned organizations',
       fabricated: false
     };

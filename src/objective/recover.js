@@ -36,8 +36,14 @@ export function recoveryAction(node, observation, { catalogue = [], retries = 0,
         reason: `${node.provider || 'preferred provider'} failed; ${next.provider} is available`
       };
     }
-    if (node.capabilityId === 'org.discover' || node.capabilityId === 'web.scrape') {
-      const alt = pickCapability(catalogue, ['web.scrape', 'web.search', 'org.discover']);
+    if (node.capabilityId === 'org.discover') {
+      if (retries < maxProviderRetries) {
+        return { action: 'retry', reason: observation.reason };
+      }
+      return { action: 'fail', reason: observation.reason };
+    }
+    if (node.capabilityId === 'web.scrape') {
+      const alt = pickCapability(catalogue, ['web.search', 'org.discover']);
       if (alt && alt !== node.capabilityId) {
         return { action: 'alternate-capability', capabilityId: alt, reason: `${node.capabilityId} failed; ${alt} is available` };
       }
