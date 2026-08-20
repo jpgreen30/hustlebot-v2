@@ -38,7 +38,7 @@ export function landscapeSlices(text) {
   while ((m = productRe.exec(cleaned))) push(m[1]);
 
   const product = out.find((s) => /\b(receptionist|software|saas|apps?|platforms?)\b/i.test(s));
-  const verticalHit = cleaned.match(/\b(dental|medical|legal|hvac|solar|roofing|logistics|insurance)\b/i);
+  const verticalHit = cleaned.match(/\b(dental|medical|legal|hvac|solar|roofing|logistics|insurance|grease-trap|fog)\b/i);
   if (product && verticalHit && !new RegExp(verticalHit[1], 'i').test(product)) {
     out.unshift(`${product} ${verticalHit[1]}`.replace(/\s+/g, ' ').trim());
   }
@@ -46,8 +46,18 @@ export function landscapeSlices(text) {
     ? out.filter((s) => /\b(receptionist|software|saas|apps?|platforms?)\b/i.test(s))
     : out;
   if (!ranked.length) {
-    const fallback = cleaned.slice(0, 90).trim();
-    if (fallback) ranked.push(fallback);
+    const compounds = cleaned.match(/\b[a-z]+(?:-[a-z]+)+\b/gi) || [];
+    const acronyms = String(text || '').match(/\b[A-Z]{2,5}\b/g) || [];
+    const industry = [
+      ...compounds,
+      ...acronyms.filter((a) => !/^(US|USA|AI|THE|AND|FOR|NOT)$/.test(a))
+    ].slice(0, 3);
+    if (industry.length) {
+      ranked.push(`${industry.join(' ')} software`.replace(/\s+/g, ' ').trim());
+    } else {
+      const words = cleaned.split(/\s+/).filter(Boolean).slice(0, 8).join(' ');
+      if (words) ranked.push(words);
+    }
   }
   return ranked.slice(0, 3);
 }

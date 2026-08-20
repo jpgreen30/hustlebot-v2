@@ -20,7 +20,8 @@ import { packContext, wrapUntrusted } from './context-pack.js';
 import { arbitrate } from './arbitrate.js';
 import { shouldRunCritic, critique } from './critic.js';
 import { looksLikeCompany, isJunkResult, discoveryIntent, onTopic } from './discover.js';
-import { classifySearchResult, RESULT_ROLE } from '../intel/classify.js';
+import { classifySearchResult, RESULT_ROLE, inferPlaybookClass } from '../intel/classify.js';
+import { proposeAdaptations } from '../intel/adapt.js';
 
 export class SwarmOrchestrator {
   constructor(engine, config = {}) {
@@ -129,6 +130,9 @@ export class SwarmOrchestrator {
 
   keepOnTopic(findings, objective) {
     const intent = discoveryIntent(objective.rawRequest || '', objective.rawRequest || '');
+    const question = objective.rawRequest || '';
+    const playbook = inferPlaybookClass(question);
+    const strict = playbook !== 'general-research';
     const productQuery = (objective.context?.slices || [])
       .filter((s) => s && !/^(general|landscape|solutions serving)/i.test(s))
       .join(' ') || null;
@@ -138,18 +142,17 @@ export class SwarmOrchestrator {
       if (/^use my location$/i.test(item.title)) return false;
       if (/yellowpages\.com\/search/i.test(String(item.url || ''))) return false;
       if (isJunkResult(item, intent)) return false;
-      const classified = classifySearchResult(item, objective.rawRequest || '');
+      const classified = classifySearchResult(item, question);
       if (classified.role !== RESULT_ROLE.CANDIDATE) return false;
       const host = String(item.url || '').toLowerCase();
       if (/(chatgpt\.com|openai\.com|claude\.ai|anthropic\.com|gemini\.google|deepai\.org|visitcalifornia\.com|dictionary\.com|fortnite)/i.test(host)
-        && !/\b(chatgpt|openai|claude|gemini|deepai)\b/i.test(objective.rawRequest || '')) {
+        && !/\b(chatgpt|openai|claude|gemini|deepai)\b/i.test(question)) {
         return false;
       }
-      if (/\.gov(\/|$)/i.test(host) && !/\b(government|campus|\.gov)\b/i.test(objective.rawRequest || '')) return false;
-      if (onTopic(item, objective.rawRequest, intent)) return true;
-      if (productQuery && onTopic(item, productQuery, intent)) return true;
-      if (p.slice && onTopic(item, p.slice, intent)) return true;
-      const strict = /\b(receptionist|dental)\b/i.test(objective.rawRequest || '');
+      if (/\.gov(\/|$)/i.test(host) && !/\b(government|campus|\.gov)\b/i.test(question)) return false;
+      if (onTopic(item, question, intent)) return true;
+      if (productQuery && onTopic(item, productQuery, intent) && !strict) return true;
+      if (p.slice && onTopic(item, p.slice, intent) && !strict) return true;
       if (strict) return false;
       return looksLikeCompany(item);
     });
@@ -252,12 +255,18 @@ export class SwarmOrchestrator {
 
       if (criticResult?.recommendRepair && (objective.repairCount || 0) < this.maxRepairCycles) {
         objective.repairCount = (objective.repairCount || 0) + 1;
+        const ads = proposeAdaptations({
+          quality: criticResult.quality,
+          request: { question: objective.rawRequest },
+          previousQueries: (decision.slices || []).map((s) => ({ query: s }))
+        });
+        const adaptedSlice = ads[0]?.queries?.[0] || decision.slices?.[0] || objective.context?.industry;
         repair = specialists.find((s) => s.role === 'repair') || createSpecialist({
           objective,
           catalogue,
           role: 'repair',
-          mission: `Targeted repair: ${criticResult.recommendRepair.detail || criticResult.recommendRepair.type}. Do not restart the swarm.`,
-          slice: decision.slices?.[0] || objective.context?.industry
+          mission: `Targeted repair: ${ads[0]?.why || criticResult.recommendRepair.detail || criticResult.recommendRepair.type}. Do not restart the swarm.`,
+          slice: adaptedSlice
         });
         if (!specialists.includes(repair)) specialists.push(repair);
         if (repair.status !== SPECIALIST_STATUS.COMPLETED && repair.status !== SPECIALIST_STATUS.PARTIAL) {
@@ -265,7 +274,14 @@ export class SwarmOrchestrator {
         }
         const repaired = repair.result?.findings || [];
         findings = this.keepOnTopic(arbitrate([...workerPackets, { specialistId: repair.specialistId, result: repair.result }]).findings, objective);
-        objective.repair = { specialistId: repair.specialistId, gap: criticResult.recommendRepair, added: repaired.length };
+        criticResult = critique(objective, findings);
+        objective.critic = criticResult;
+        objective.repair = {
+          specialistId: repair.specialistId,
+          gap: criticResult.recommendRepair,
+          added: repaired.length,
+          adaptation: ads[0] || null
+        };
         this.engine.persist(objective);
       }
     }
@@ -278,7 +294,9 @@ export class SwarmOrchestrator {
 
     const topN = Number(objective.context?.topN || 5);
     findings = this.keepOnTopic(findings, objective);
-    if (criticResult?.clean) findings = criticResult.clean;
+    criticResult = critique(objective, findings);
+    findings = criticResult.clean || findings;
+    objective.critic = criticResult;
     const synthesized = this.keepOnTopic(synthesizer?.result?.findings || [], objective);
     const ranked = (synthesized.length ? synthesized : findings);
     const top = ranked.slice(0, topN);

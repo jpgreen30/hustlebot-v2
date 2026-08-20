@@ -2,7 +2,7 @@ import { normalizeDomain, normalizeUrl } from '../acquisition/normalize.js';
 import { extractProspectsFromPage } from '../acquisition/extract.js';
 import { mapLimit } from './util.js';
 import { planSearchQueries } from '../intel/queries.js';
-import { classifySearchResult, RESULT_ROLE } from '../intel/classify.js';
+import { classifySearchResult, RESULT_ROLE, topicalHit } from '../intel/classify.js';
 
 const AGGREGATOR_HOST = /(^|\.)(yelp|angi|thumbtack|bbb|mapquest|forbes|bing|google|duckduckgo|homeguide|ontoplist|expertise|yellowpages|superpages|manta|hotfrog)\.com$|(^|\.)(roof\.info)$/i;
 const JUNK_HOST = /(^|\.)(wikipedia\.org|britannica\.com|latimes\.com|nytimes\.com|washingtonpost\.com|cnn\.com|bbc\.com|merriam-webster\.com|spanishdict\.com|dictionary\.cambridge\.org|collinsdictionary\.com|definitions\.net|dictionary\.com|thefreedictionary\.com|urbandictionary\.com|wikihow\.com|quora\.com|imdb\.com|abbreviationfinder\.org|acronymfinder\.com|microsoft\.com|xbox\.com|fortnite\.gg|epicgames\.com)$/i;
@@ -221,10 +221,17 @@ function promoteArticleToCompany(item = {}, intent = {}) {
 }
 
 function queryTokens(query) {
-  return String(query || '')
-    .toLowerCase()
-    .split(/[^a-z0-9]+/)
-    .filter((token) => token.length > 4);
+  const raw = String(query || '');
+  const tokens = [];
+  for (const m of raw.matchAll(/\b[a-z]{3,}(?:-[a-z]{3,})+\b/gi)) {
+    tokens.push(m[0].toLowerCase());
+    tokens.push(...m[0].toLowerCase().split('-').filter((t) => t.length > 2));
+  }
+  for (const m of raw.matchAll(/\b[A-Z]{2,5}\b/g)) {
+    if (!/^(US|USA|THE|AND|FOR|NOT|AI)$/.test(m[0])) tokens.push(m[0].toLowerCase());
+  }
+  tokens.push(...raw.toLowerCase().split(/[^a-z0-9]+/).filter((token) => token.length > 4));
+  return [...new Set(tokens)];
 }
 
 function hayHasToken(hay, token) {
@@ -249,24 +256,19 @@ function hayForMatch(item = {}) {
 }
 
 function matchesQuery(item, query) {
-  const tokens = queryTokens(query).filter((token) => !WEAK_QUERY_TOKEN.has(token));
   const q = String(query || '').toLowerCase();
-  if (/\bapps?\b/.test(q)) tokens.push('app', 'apps');
-  if (/\bai\b/.test(q) && !/\breceptionist|dental|pregnan/i.test(q)) tokens.push('ai');
-  if (!tokens.length) return !isJunkResult(item, discoveryIntent(query));
   const hay = hayForMatch(item);
   if (/\breceptionist\b/i.test(q) && /\b(virtual receptionist|ai receptionist|phone answering|answering service|after[- ]hours (call|answer)|ai phone)\b/i.test(hay)) {
     return true;
   }
+  const topic = topicalHit(item, query);
+  if (topic.tokens.length) return topic.hit;
+  const tokens = queryTokens(query).filter((token) => !WEAK_QUERY_TOKEN.has(token));
+  if (/\bapps?\b/.test(q)) tokens.push('app', 'apps');
+  if (/\bai\b/.test(q) && !/\breceptionist|dental|pregnan/i.test(q)) tokens.push('ai');
+  if (!tokens.length) return !isJunkResult(item, discoveryIntent(query));
   const hits = tokens.filter((token) => hayHasToken(hay, token) || (token.length > 4 && hay.includes(token)));
-  if (!hits.length) return false;
-  const distinctive = tokens.filter((t) => t.length >= 8 || /^(dental|roofing|receptionist)$/i.test(t));
-  if (distinctive.length) {
-    if (hits.some((t) => distinctive.includes(t))) return true;
-    if (hits.some((t) => /^(app|apps|software|saas|platform|tracker)$/i.test(t))) return true;
-    return false;
-  }
-  return true;
+  return hits.length > 0;
 }
 
 export function onTopic(item, query, intent = {}) {

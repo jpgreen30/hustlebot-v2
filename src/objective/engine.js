@@ -536,8 +536,14 @@ export class MacGyverEngine {
           url: p.website,
           snippet: p.description
         }, objective.rawRequest || '');
-        if (classified.role === RESULT_ROLE.CANDIDATE) accepted.push(p);
-        else rejected.push({ title: p.organizationName || p.name, url: p.website, reason: classified.reasons.join(',') });
+        const structuralJunk = (classified.reasons || []).some((r) =>
+          /listicle|directory|apk-mirror|clinical|entertainment|encyclopedia|generic-ai|package-tracker|publication|retail-catalog/i.test(r)
+        );
+        if (classified.role === RESULT_ROLE.CANDIDATE || (!structuralJunk && p.website && classified.reasons?.includes('off-topic'))) {
+          accepted.push(p);
+        } else {
+          rejected.push({ title: p.organizationName || p.name, url: p.website, reason: classified.reasons.join(',') });
+        }
       }
       const quality = evaluateResearch({
         question: objective.rawRequest,

@@ -4,6 +4,21 @@
 
 ---
 
+## Entry 00D10.1: Topical relevance is a hard gate
+
+**Date**: 2026-08-20  
+**Decision**: Live FOG research on Day-10 SHA c09deb0 classified tracker.gg / CBS Tracker / fishing boats as STRONG because quality used entity-type × quantity, and swarm `keepOnTopic` fell through to `looksLikeCompany`. That is a false green.
+
+- Relevance is scored against distinctive objective tokens (hyphenated compounds, acronyms, industry nouns). Generic nouns (`software`, `tracker`, `app`) do not satisfy the gate.
+- Playbook order: event → local-business → consumer product-landscape → b2b-software → regulated. FOG "software used by …" is `b2b-software`, not pregnancy-style product landscape.
+- Hardware/service pages and mega-retail catalogs are SOURCE, not vendor candidates, when the objective asks for software.
+- Entertainment / package-tracker hosts are REJECT unless the objective is about those domains.
+- Swarm keepOnTopic is strict for every playbook except general-research. Repair uses adapted queries. Critic.clean is recomputed after repair so it cannot restore junk.
+
+No grease-trap vendor list. No Day-11 work.
+
+---
+
 ## Entry 00D10: Day-10 research quality engine + knowledge consolidation
 
 **Date**: 2026-08-20  

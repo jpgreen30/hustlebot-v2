@@ -232,6 +232,15 @@ describe('Day-7 delegation decision', () => {
     assert.ok(!slices.some((s) => /solutions serving/i.test(s)));
     assert.ok(!slices.some((s) => /pearl|weave|dentrix/i.test(s)));
   });
+
+  test('FOG landscape slices are industry compounds not a truncated dump', () => {
+    const slices = landscapeSlices('Research the competitive landscape for software and technology used by commercial grease-trap and FOG maintenance service companies in the United States. Identify relevant software providers, adjacent solutions, industry terminology, and the information sources that define this ecosystem. Do not contact anyone.');
+    const blob = slices.join(' | ');
+    assert.ok(/grease-trap|FOG/i.test(blob));
+    assert.ok(!/compani$/i.test(blob));
+    assert.ok(!slices.some((s) => s.length > 80 && /used by commercial/.test(s)));
+    assert.ok(!/zurn|schier|wasteworks/i.test(blob));
+  });
 });
 
 describe('Day-7 least privilege + injection', () => {

@@ -2,7 +2,7 @@
  * Research quality evaluator. Scores against the objective, not aesthetics.
  */
 
-import { classifySearchResult, diversity, inferRequestedType, RESULT_ROLE } from './classify.js';
+import { classifySearchResult, diversity, inferRequestedType, topicalScore, RESULT_ROLE } from './classify.js';
 
 export const QUALITY = {
   STRONG: 'STRONG',
@@ -29,10 +29,11 @@ export function evaluateResearch(input = {}) {
   const typeFit = n
     ? accepted.filter((a) => {
       const kind = a.pageKind || a.entityType || a.type;
-      if (requestedType === 'PRODUCT') return /PRODUCT|APP|ORGANIZATION/i.test(kind || 'PRODUCT');
+      if (requestedType === 'PRODUCT') return /PRODUCT|APP|ORGANIZATION|COMPANY/i.test(kind || 'PRODUCT');
       return !/LISTICLE|DIRECTORY|ARTICLE|MIRROR|CLINICAL/i.test(kind || '');
     }).length / n
     : 0;
+  const relevance = clamp(topicalScore(accepted, question));
   const geoNeedle = geography ? String(geography).toLowerCase().split(/\s+/)[0] : null;
   const geoHits = geoNeedle
     ? accepted.filter((a) => `${a.description || ''} ${a.location || ''} ${a.snippet || ''}`.toLowerCase().includes(geoNeedle)).length
@@ -60,7 +61,7 @@ export function evaluateResearch(input = {}) {
   const sourceAuthority = firstPartyCoverage * 0.7 + (1 - Math.min(1, div.concentration)) * 0.3;
 
   const dimensions = {
-    relevance: clamp(typeFit * 0.6 + requestedQuantityCoverage * 0.4),
+    relevance: clamp(relevance),
     entityTypeFit: clamp(typeFit),
     geographicFit: clamp(geographicFit),
     sourceAuthority: clamp(sourceAuthority),
@@ -85,10 +86,12 @@ export function evaluateResearch(input = {}) {
 
   let classification = QUALITY.FAILED;
   if (n === 0) classification = QUALITY.FAILED;
-  else if (occupyingJunk > 0 && occupyingJunk / Math.max(n, 1) >= 0.3) classification = QUALITY.WEAK;
-  else if (requestedQuantityCoverage >= 0.7 && typeFit >= 0.85 && noiseRatio <= 0.3) classification = QUALITY.STRONG;
-  else if (requestedQuantityCoverage >= 0.4 && typeFit >= 0.7 && noiseRatio <= 0.5) classification = QUALITY.ACCEPTABLE;
-  else if (n >= 1 && typeFit >= 0.5) classification = QUALITY.WEAK;
+  else if (relevance < 0.4 || occupyingJunk / Math.max(n, 1) >= 0.3) classification = QUALITY.WEAK;
+  else if (requestedQuantityCoverage >= 0.7 && typeFit >= 0.85 && relevance >= 0.75 && occupyingJunk === 0 && noiseRatio <= 0.3) {
+    classification = QUALITY.STRONG;
+  } else if (requestedQuantityCoverage >= 0.4 && typeFit >= 0.7 && relevance >= 0.6 && noiseRatio <= 0.5) {
+    classification = QUALITY.ACCEPTABLE;
+  } else if (n >= 1 && typeFit >= 0.5 && relevance >= 0.4) classification = QUALITY.WEAK;
   else classification = QUALITY.FAILED;
 
   const weaknesses = [];
@@ -98,6 +101,7 @@ export function evaluateResearch(input = {}) {
       detail: `Requested ${requested}, accepted ${n} legitimate entities.`
     });
   }
+  if (relevance < 0.75) weaknesses.push({ type: 'relevance', detail: 'Results do not match the objective vocabulary.' });
   if (typeFit < 0.85) weaknesses.push({ type: 'entity-type', detail: 'Some results are the wrong entity type.' });
   if (noiseRatio > 0.35) weaknesses.push({ type: 'noise', detail: `Noise ratio ${noiseRatio.toFixed(2)}.` });
   if (firstPartyCoverage < 0.4 && n) weaknesses.push({ type: 'first-party', detail: 'Low first-party coverage.' });

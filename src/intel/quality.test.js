@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { IntelStore } from './store.js';
 import { EvidenceGraph, decideMerge } from './graph.js';
 import { IntelligenceFabric } from './research.js';
-import { classifySearchResult, isListicle, RESULT_ROLE, PAGE_KIND } from './classify.js';
+import { classifySearchResult, isListicle, RESULT_ROLE, PAGE_KIND, inferPlaybookClass } from './classify.js';
 import { evaluateResearch, QUALITY } from './quality.js';
 import { proposeAdaptations, isNovelQuery, normalizeQuery } from './adapt.js';
 import { preferredDisplayName, normalizeProductAlias, registrableParts } from './names.js';
@@ -55,6 +55,44 @@ describe('Day-10 classification', () => {
     assert.equal(c.role, RESULT_ROLE.SOURCE);
     assert.equal(c.pageKind, PAGE_KIND.DIRECTORY);
   });
+
+  test('entertainment and package trackers are off-topic for FOG software', () => {
+    const q = 'Research the competitive landscape for software used by commercial grease-trap and FOG maintenance service companies in the United States.';
+    const tracker = classifySearchResult({
+      title: 'Find your stats for your favorite games - Tracker Network',
+      url: 'https://tracker.gg/',
+      snippet: 'Tracker Network provides stats and leaderboards to gamers'
+    }, q);
+    assert.equal(tracker.role, RESULT_ROLE.REJECT);
+    const boats = classifySearchResult({
+      title: 'TRACKER Boats',
+      url: 'https://www.trackerboats.com/',
+      snippet: 'America’s #1 selling aluminum fishing boats'
+    }, q);
+    assert.equal(boats.role, RESULT_ROLE.REJECT);
+    const cbs = classifySearchResult({
+      title: 'Tracker on CBS',
+      url: 'https://www.cbs.com/shows/tracker',
+      snippet: 'Season 4 premiere date Justin Hartley'
+    }, q);
+    assert.equal(cbs.role, RESULT_ROLE.REJECT);
+    const zurn = classifySearchResult({
+      title: 'Grease Interceptor - GT2700 | Zurn',
+      url: 'https://www.zurn.com/products/grease-interceptor',
+      snippet: 'Grease interceptor for commercial kitchens'
+    }, q);
+    assert.ok(zurn.role === RESULT_ROLE.SOURCE || zurn.role === RESULT_ROLE.REJECT);
+    assert.notEqual(zurn.role, RESULT_ROLE.CANDIDATE);
+  });
+
+  test('psychologytoday is a publication source for pregnancy apps', () => {
+    const c = classifySearchResult({
+      title: 'Best pregnancy apps - Psychology Today',
+      url: 'https://www.psychologytoday.com/us/blog/pregnancy-apps',
+      snippet: 'A magazine article about pregnancy apps'
+    }, 'Research 10 pregnancy apps');
+    assert.notEqual(c.role, RESULT_ROLE.CANDIDATE);
+  });
 });
 
 describe('Day-10 quality model', () => {
@@ -82,6 +120,18 @@ describe('Day-10 quality model', () => {
     assert.equal(q.classification, QUALITY.WEAK);
     assert.equal(q.legitimateFound, 4);
     assert.ok(q.gaps.some((g) => g.requested === 10 && g.legitimateFound === 4));
+  });
+
+  test('off-topic tracker results for FOG are not STRONG', () => {
+    const q = 'Research the competitive landscape for software and technology used by commercial grease-trap and FOG maintenance service companies in the United States.';
+    const accepted = [
+      { organizationName: 'Tracker Network', website: 'https://tracker.gg/', description: 'game stats', pageKind: 'PRODUCT' },
+      { organizationName: 'TRACKER Boats', website: 'https://www.trackerboats.com/', description: 'fishing boats', pageKind: 'PRODUCT' },
+      { organizationName: 'Tracker CBS', website: 'https://www.cbs.com/shows/tracker', description: 'Season 4', pageKind: 'PRODUCT' }
+    ];
+    const quality = evaluateResearch({ question: q, requested: 10, accepted, rejected: [] });
+    assert.notEqual(quality.classification, QUALITY.STRONG);
+    assert.ok(quality.dimensions.relevance < 0.4 || quality.occupyingJunk >= 1);
   });
 });
 
@@ -318,5 +368,13 @@ describe('Day-10 playbooks are classes not vendor lists', () => {
     assert.ok(!/babycenter|what to expect/i.test(JSON.stringify(pb)));
     assert.ok(SAMPLE_THRESHOLD >= 3);
     assert.equal(shouldTrustObservation({ observations: 1, lastObservedAt: new Date().toISOString() }), false);
+  });
+
+  test('FOG software landscape is b2b-software not product-landscape', () => {
+    const q = 'Research the competitive landscape for software and technology used by commercial grease-trap and FOG maintenance service companies in the United States.';
+    assert.equal(inferPlaybookClass(q), 'b2b-software');
+    const pb = matchPlaybook(q);
+    assert.equal(pb.class, 'b2b-software');
+    assert.ok(!/zurn|schier|tracker\.gg/i.test(JSON.stringify(pb)));
   });
 });

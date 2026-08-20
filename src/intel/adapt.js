@@ -60,19 +60,27 @@ export function proposeAdaptations({ quality, request, previousQueries = [], voc
   };
 
   const types = new Set(weaknesses.map((w) => w.type));
-  if (types.has('slot-pollution') || types.has('entity-type')) {
-    if (pb === 'product-landscape') {
+  const qn = String(question);
+  if (types.has('slot-pollution') || types.has('entity-type') || types.has('relevance')) {
+    if (pb === 'product-landscape' && /pregnan|parenting/i.test(qn)) {
       push('category-to-product', ['official app website', 'tracker app official site'], 'Wrong entity types occupied slots — search first-party product homepages.');
     }
-    if (/\breceptionist\b/i.test(question)) {
+    if (/\breceptionist\b/i.test(qn)) {
       push('synonym', ['virtual receptionist software', 'AI phone answering'], 'Category synonym queries after junk occupied slots.');
+    }
+    if (pb === 'b2b-software' || pb === 'regulated-information') {
+      const head = qn.split(/[.!?]/)[0].slice(0, 80);
+      push('ecosystem', [`${head} software`, `${head} association`], 'Off-topic or wrong-type results — search industry software and catalogues.');
     }
   }
   if (types.has('quantity') || quality?.classification === 'WEAK' || quality?.classification === 'FAILED') {
-    if (pb === 'product-landscape') {
+    if (pb === 'product-landscape' && /pregnan|parenting/i.test(qn)) {
       push('plural-to-product', ['pregnancy tracker app', 'parenting app official', 'baby tracker app'], 'Low legitimate recall — expand product nouns, not competitor lists.');
+    } else if (pb === 'product-landscape') {
+      const head = qn.split(/[.!?]/)[0].slice(0, 70);
+      push('plural-to-product', [`${head} official site`], 'Low legitimate recall — first-party product homepages.');
     }
-    if (/\breceptionist\b/i.test(question) && /\bdental\b/i.test(question)) {
+    if (/\breceptionist\b/i.test(qn) && /\bdental\b/i.test(qn)) {
       push('consumer-to-industry', ['AI receptionist dental', 'dental virtual receptionist', 'dental answering service AI'], 'Dental-specific coverage weak — compose product + vertical nouns from the objective.');
     }
     if (pb === 'local-business') {

@@ -5,6 +5,7 @@
 
 import { extractSlices } from '../objective/quantities.js';
 import { INTEL_INTENT } from './schema.js';
+import { inferPlaybookClass } from './classify.js';
 
 const NOUN = /([a-z0-9][a-z0-9&.'/-]*(?:\s+[a-z0-9][a-z0-9&.'/-]*){0,4}\s+(?:apps?|platforms?|companies|products|solutions|providers|directories|communities|trackers?|receptionist))/gi;
 
@@ -30,7 +31,9 @@ export function planSearchQueries(input = {}) {
   const givenSlices = Array.isArray(input.slices) && input.slices.length ? input.slices : null;
   const slices = (givenSlices || extractSlices(question)).filter((s) => s && !/^solutions serving\b/i.test(s) && !/^(general|landscape)$/i.test(s));
   const primary = question.split(/[.!?]/)[0].slice(0, 140).trim() || String(input.question || '').slice(0, 140);
-  const wantProducts = /\b(app|apps|platform|product|saas|software|marketplace|tracker|receptionist)\b/i.test(question);
+  const playbook = inferPlaybookClass(input.question || question);
+  const wantProducts = playbook === 'product-landscape';
+  const wantSoftware = playbook === 'b2b-software' || playbook === 'regulated-information';
   const out = [];
   const seen = new Set();
   const push = (query, reason, fromSlice = null) => {
@@ -65,7 +68,7 @@ export function planSearchQueries(input = {}) {
     if (/platforms?$/i.test(trimmed)) {
       push(trimmed.replace(/platforms?$/i, 'apps'), 'platform-to-app expansion');
     }
-    if (/apps?$/i.test(trimmed)) {
+    if (/apps?$/i.test(trimmed) && /pregnan|parenting/i.test(question)) {
       push(trimmed.replace(/apps?$/i, 'tracker'), 'adjacent product noun');
     }
   }
@@ -85,6 +88,16 @@ export function planSearchQueries(input = {}) {
     const loc = geography ? `${slice} ${geography}` : slice;
     push(loc, 'interpreted slice', slice);
     if (wantProducts) push(`${slice} app official site`, 'first-party product homepage', slice);
+    if (wantSoftware) push(`${slice} software`, 'industry software query', slice);
+  }
+
+  const compounds = question.match(/\b[a-z]+(?:-[a-z]+)+\b/gi) || [];
+  const acronyms = String(input.question || '').match(/\b[A-Z]{2,5}\b/g) || [];
+  for (const c of compounds.slice(0, 3)) {
+    if (wantSoftware || wantProducts) push(`${c} software`, 'industry compound');
+  }
+  for (const a of acronyms.filter((x) => !/^(US|USA|AI|THE|AND|FOR|NOT)$/.test(x)).slice(0, 2)) {
+    if (wantSoftware) push(`${a} maintenance software`, 'acronym software query');
   }
 
   push(primary, 'primary objective');

@@ -300,8 +300,7 @@ export class IntelligenceFabric {
       })),
       rejected: buckets.rejected,
       evidence: unique.flatMap((u) => [u.evidence].filter(Boolean)),
-      geography: hints.geography,
-      conflicts: this.store?.stats?.conflictsDetected || 0
+      geography: hints.geography
     });
 
     let adaptationPasses = 0;
