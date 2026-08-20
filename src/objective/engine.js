@@ -541,9 +541,22 @@ export class MacGyverEngine {
       const catalogue = this.catalogue({ availableOnly: false });
       const needle = /apollo/i.test(query) ? 'apollo' : /firecrawl/i.test(query) ? 'firecrawl' : null;
       const providers = catalogue.flatMap((c) => (c.providers || []).map((p) => ({ capabilityId: c.capabilityId, ...p })));
-      const matches = needle ? providers.filter((p) => String(p.provider).toLowerCase().includes(needle)) : providers;
-      const lines = matches.slice(0, 20).map((p) => `${p.provider} on ${p.capabilityId}: ${p.health} available=${p.available}`);
-      return { status: 'ok', report: lines.join('\n') || 'No matching providers.', providers: matches };
+      let matches = needle
+        ? providers.filter((p) => {
+          const blob = `${p.provider} ${p.capabilityId}`.toLowerCase();
+          if (blob.includes(needle)) return true;
+          if (needle === 'apollo' && /enrich|contact\.discover/.test(blob)) return true;
+          return false;
+        })
+        : providers;
+      if (needle === 'apollo' && !matches.length) {
+        matches = providers.filter((p) => /enrich|contact/.test(p.capabilityId));
+      }
+      const lines = matches.slice(0, 20).map((p) => `${p.provider} on ${p.capabilityId}: ${p.health} available=${p.available} cost=${p.expectedCost}`);
+      const report = needle === 'apollo'
+        ? (lines.join('\n') || 'Apollo is not registered as a standalone provider.') + '\nApollo is used through contact.discover / prospect.enrich, never as a direct outbound tool.'
+        : (lines.join('\n') || 'No matching providers.');
+      return { status: 'ok', report, providers: matches };
     }
     if (action === 'web-research') {
       const catalogue = this.catalogue({ availableOnly: true });

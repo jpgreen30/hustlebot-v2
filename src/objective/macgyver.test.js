@@ -484,4 +484,10 @@ describe('Day-6 MacGyver logistics + fabric + router', () => {
     const logistics = detector.hintObjectiveRunIntent('Research three Los Angeles logistics companies and compare them. Do not contact anyone.');
     assert.equal(logistics.capabilityId, 'objective.run');
   });
+
+  test('Is Apollo healthy reports enrichment/contact providers', async () => {
+    const engine = new MacGyverEngine({ registry: macgyverRegistry() });
+    const out = await engine.inspectTools({ action: 'health', query: 'Is Apollo healthy?' });
+    assert.match(out.report, /apollo|enrich|contact/i);
+  });
 });
