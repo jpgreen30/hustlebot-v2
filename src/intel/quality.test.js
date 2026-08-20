@@ -400,4 +400,9 @@ describe('Day-10 playbooks are classes not vendor lists', () => {
     assert.equal(pb.class, 'b2b-software');
     assert.ok(!/zurn|schier|tracker\.gg/i.test(JSON.stringify(pb)));
   });
+
+  test('LA roofing companies that could use a receptionist stay local-business', () => {
+    const q = 'Find up to 10 legitimate roofing companies in Los Angeles that show evidence of sufficient operating scale to be plausible users of an AI receptionist. Do not contact anyone.';
+    assert.equal(inferPlaybookClass(q), 'local-business');
+  });
 });

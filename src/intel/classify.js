@@ -73,7 +73,7 @@ export function inferPlaybookClass(question = '') {
   const q = String(question || '').toLowerCase();
   if (/\bexhibitors?\b|\bsummit\b|\bconference\b/.test(q)) return 'event-exhibitors';
   if (/\b(roofing|hvac|solar|contractor)\b/.test(q)
-    && !/\b(software|saas|app|apps|receptionist)\b/.test(q)) {
+    && !/\b(receptionist (software|solutions|apps?|providers)|saas)\b/.test(q)) {
     return 'local-business';
   }
   if (/\b(app|apps|parenting|pregnancy|receptionist)\b/.test(q)
