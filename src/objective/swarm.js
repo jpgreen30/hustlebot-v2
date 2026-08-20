@@ -121,6 +121,22 @@ export class SwarmOrchestrator {
     return specialists;
   }
 
+  keepOnTopic(findings, objective) {
+    const intent = discoveryIntent(objective.rawRequest || '', objective.rawRequest || '');
+    return (findings || []).filter((p) => {
+      const item = { title: p.organizationName || p.name, url: p.website || p.sourceUrl, snippet: p.description };
+      if (!item.title) return false;
+      if (isJunkResult(item, intent)) return false;
+      const host = String(item.url || '').toLowerCase();
+      if (/(chatgpt\.com|openai\.com|claude\.ai|anthropic\.com|gemini\.google|deepai\.org|visitcalifornia\.com|dictionary\.com|fortnite)/i.test(host)
+        && !/\b(chatgpt|openai|claude|gemini|deepai)\b/i.test(objective.rawRequest || '')) {
+        return false;
+      }
+      if (/\.gov(\/|$)/i.test(host) && !/\b(government|campus|\.gov)\b/i.test(objective.rawRequest || '')) return false;
+      return onTopic(item, objective.rawRequest, intent) || looksLikeCompany(item);
+    });
+  }
+
   async execute(objective, decision, catalogue, input = {}) {
     const startedAt = Date.now();
     objective.status = OBJECTIVE_STATUS.RUNNING;
@@ -177,7 +193,7 @@ export class SwarmOrchestrator {
     const arbitration = arbitrate(workerPackets);
     objective.arbitration = arbitration;
 
-    let findings = arbitration.findings;
+    let findings = this.keepOnTopic(arbitration.findings, objective);
     let criticResult = null;
     let repair = null;
     if (shouldRunCritic(objective, decision) && objective.status !== OBJECTIVE_STATUS.CANCELLED) {
@@ -404,7 +420,7 @@ export class SwarmOrchestrator {
         const bogusSlice = !slice || /^(general|landscape)$/i.test(slice);
         const query = bogusSlice
           ? (specialist.scope?.query || objective.context?.query || objective.rawRequest)
-          : `${slice} ${specialist.scope?.location || objective.context?.location || ''}`.trim();
+          : `${slice} ${specialist.scope?.location || objective.context?.location || ''}`.replace(/\s+/g, ' ').trim();
         const invocation = await this.invokeGranted(specialist, cap, {
           query,
           industry: bogusSlice ? (objective.context?.industry || null) : slice,

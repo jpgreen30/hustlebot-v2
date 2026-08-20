@@ -238,15 +238,27 @@ function matchesQuery(item, query) {
   const tokens = queryTokens(query).filter((token) => !WEAK_QUERY_TOKEN.has(token));
   const q = String(query || '').toLowerCase();
   if (/\bapps?\b/.test(q)) tokens.push('app', 'apps');
-  if (/\bai\b/.test(q)) tokens.push('ai');
+  if (/\bai\b/.test(q) && !/\breceptionist|dental|pregnan/i.test(q)) tokens.push('ai');
   if (!tokens.length) return !isJunkResult(item, discoveryIntent(query));
   const hay = `${item.title || ''} ${item.url || ''} ${item.snippet || ''}`.toLowerCase();
-  return tokens.some((token) => hayHasToken(hay, token) || (token.length > 4 && hay.includes(token)));
+  const hits = tokens.filter((token) => hayHasToken(hay, token) || (token.length > 4 && hay.includes(token)));
+  if (!hits.length) return false;
+  const distinctive = tokens.filter((t) => t.length >= 8 || /^(dental|roofing|receptionist)$/i.test(t));
+  if (distinctive.length) {
+    if (hits.some((t) => distinctive.includes(t))) return true;
+    if (hits.some((t) => /^(app|apps|software|saas|platform|tracker)$/i.test(t))) return true;
+    return false;
+  }
+  return true;
 }
 
 export function onTopic(item, query, intent = {}) {
   const host = hostOf(item.url || item.website);
   if (/\.(edu|gov)$/i.test(host) && !/\b(university|college|school|government|campus)\b/i.test(query)) {
+    return false;
+  }
+  if (/(chatgpt\.com|openai\.com|claude\.ai|anthropic\.com|gemini\.google|deepai\.org)/i.test(host)
+    && !/\b(chatgpt|openai|claude|gemini|deepai)\b/i.test(query)) {
     return false;
   }
   const hay = `${item.title || ''} ${item.snippet || ''}`.toLowerCase();
