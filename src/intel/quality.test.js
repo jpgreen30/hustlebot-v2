@@ -56,6 +56,16 @@ describe('Day-10 classification', () => {
     assert.equal(c.pageKind, PAGE_KIND.DIRECTORY);
   });
 
+  test('Thumbtack 10 Best listicle is a source not a roofing company', () => {
+    const c = classifySearchResult({
+      title: 'The 10 Best Roofing Contractors in Los Angeles, CA 2026',
+      url: 'https://www.thumbtack.com/ca/los-angeles/roofing/',
+      snippet: 'Here is the definitive list of Los Angeles roofing contractors'
+    }, 'Find up to 10 legitimate roofing companies in Los Angeles');
+    assert.notEqual(c.role, RESULT_ROLE.CANDIDATE);
+    assert.ok(c.pageKind === PAGE_KIND.DIRECTORY || c.pageKind === PAGE_KIND.LISTICLE);
+  });
+
   test('entertainment and package trackers are off-topic for FOG software', () => {
     const q = 'Research the competitive landscape for software used by commercial grease-trap and FOG maintenance service companies in the United States.';
     const tracker = classifySearchResult({

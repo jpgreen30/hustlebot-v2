@@ -5,7 +5,7 @@
 
 const CLINICAL_HOST = /(clevelandclinic|cdc\.gov|mayoclinic|nih\.gov|medlineplus|webmd|healthline|kidshealth|apa\.org|who\.int|nhs\.uk)/i;
 const APK_HOST = /(apkpure|apkcombo|apkmirror|aptoide|apkdownload)/i;
-const DIRECTORY_HOST = /(g2\.com|capterra|getapp|softwareadvice|trustradius|yellowpages|superpages|yelp\.com|angi\.com|bbb\.org|crunchbase|producthunt)/i;
+const DIRECTORY_HOST = /(g2\.com|capterra|getapp|softwareadvice|trustradius|yellowpages|superpages|yelp\.com|angi\.com|bbb\.org|crunchbase|producthunt|thumbtack\.com|homeguide\.com|expertise\.com)/i;
 const GENERIC_AI_HOST = /(chatgpt\.com|openai\.com|claude\.ai|anthropic\.com|gemini\.google)/i;
 const ENCYCLOPEDIA_HOST = /(wikipedia\.org|britannica\.com|wikihow\.com)/i;
 const ENTERTAINMENT_HOST = /(tvinsider\.com|imdb\.com|rottentomatoes\.com|cbs\.com|nbc\.com|abc\.com|hulu\.com|netflix\.com|tracker\.gg|steampowered\.com|epicgames\.com|xbox\.com|fortnite\.gg|fandom\.com)/i;
@@ -160,9 +160,11 @@ export function isListicle(item = {}) {
   const path = pathOf(url);
   const hay = `${title} ${item.snippet || item.description || ''}`.toLowerCase();
   if (/\/(blog|guides?|articles?|roundup|reviews)\//i.test(path)) return true;
-  if (/^(best|top)\s+\d*\s*/i.test(title) && /\b(apps?|software|tools|companies|providers|solutions)\b/i.test(title)) return true;
+  if (/^(best|top)\s+\d*\s*/i.test(title) && /\b(apps?|software|tools|companies|providers|solutions|contractors)\b/i.test(title)) return true;
+  if (/\bthe\s+\d+\s+best\b/i.test(title)) return true;
+  if (/\b\d+\s+best\b/i.test(title) && /\b(apps?|software|tools|companies|providers|contractors|roofing)\b/i.test(title)) return true;
   if (/\b(compared|vs\.?|versus|roundup|ultimate guide)\b/i.test(title)) return true;
-  if (/\btop\s+\d+\b/i.test(hay) && /\b(best|tools|apps|software)\b/i.test(hay)) return true;
+  if (/\btop\s+\d+\b/i.test(hay) && /\b(best|tools|apps|software|contractors)\b/i.test(hay)) return true;
   return false;
 }
 

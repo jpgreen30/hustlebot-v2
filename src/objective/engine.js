@@ -22,8 +22,9 @@ import { decideDelegation } from './delegate.js';
 import { SwarmOrchestrator } from './swarm.js';
 import { SPECIALIST_STATUS } from './specialist.js';
 import { matchIntelControl, formatIntelReply } from '../intel/control.js';
-import { evaluateResearch } from '../intel/quality.js';
+import { evaluateResearch, QUALITY } from '../intel/quality.js';
 import { classifySearchResult, RESULT_ROLE } from '../intel/classify.js';
+import { proposeAdaptations } from '../intel/adapt.js';
 
 export class MacGyverEngine {
   constructor({
@@ -545,13 +546,68 @@ export class MacGyverEngine {
           rejected.push({ title: p.organizationName || p.name, url: p.website, reason: classified.reasons.join(',') });
         }
       }
-      const quality = evaluateResearch({
+      let quality = evaluateResearch({
         question: objective.rawRequest,
         requested: objective.context?.findN || 10,
         accepted,
         rejected,
         geography: objective.context?.location
       });
+      if (
+        (quality.classification === QUALITY.WEAK || quality.classification === QUALITY.FAILED)
+        && !objective.repairCount
+        && this.intel?.research
+      ) {
+        objective.repairCount = 1;
+        const ads = proposeAdaptations({
+          quality,
+          request: { question: objective.rawRequest },
+          previousQueries: []
+        });
+        try {
+          const extra = await this.intel.research({
+            question: ads[0]?.queries?.[0] || objective.rawRequest,
+            quantity: objective.context?.findN || 10,
+            maxAdaptations: 1,
+            maxDurationMs: 25000,
+            objectiveId: objective.objectiveId
+          }, { forceUnavailable: input.forceUnavailable || [] });
+          for (const ent of extra.prospects || extra.entities || []) {
+            const row = {
+              organizationName: ent.organizationName || ent.name || ent.displayName,
+              website: ent.website,
+              domain: ent.domain,
+              description: ent.description,
+              entityId: ent.entityId,
+              evidenceIds: ent.evidenceIds
+            };
+            const classified = classifySearchResult({
+              title: row.organizationName,
+              url: row.website,
+              snippet: row.description
+            }, objective.rawRequest || '');
+            const exists = accepted.some((a) => (a.domain || a.website) === (row.domain || row.website));
+            if (classified.role === RESULT_ROLE.CANDIDATE && row.website && !exists) accepted.push(row);
+            else if (classified.role !== RESULT_ROLE.CANDIDATE) {
+              rejected.push({ title: row.organizationName, url: row.website, reason: (classified.reasons || []).join(',') });
+            }
+          }
+          quality = evaluateResearch({
+            question: objective.rawRequest,
+            requested: objective.context?.findN || 10,
+            accepted,
+            rejected,
+            geography: objective.context?.location
+          });
+          objective.repair = {
+            adaptation: ads[0] || null,
+            added: (extra.prospects || extra.entities || []).length,
+            qualityAfter: quality.classification
+          };
+        } catch (error) {
+          objective.repair = { error: error.message };
+        }
+      }
       objective.result = {
         prospects: accepted,
         top: accepted.slice(0, objective.context?.topN || 5),

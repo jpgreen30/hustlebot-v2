@@ -105,8 +105,8 @@ export function proposeAdaptations({ quality, request, previousQueries = [], voc
     if (/\breceptionist\b/i.test(qn) && /\bdental\b/i.test(qn)) {
       push('consumer-to-industry', ['AI receptionist dental', 'dental virtual receptionist', 'dental answering service AI'], 'Dental-specific coverage weak — compose product + vertical nouns from the objective.');
     }
-    if (pb === 'local-business') {
-      push('search-to-directory', [], 'Generic search returned SEO titles — try public business directories.', ['DIRECTORY', 'FIRST_PARTY_WEB']);
+    if (pb === 'event-exhibitors') {
+      push('event-directory', industrySeedQueries(qn, 'b2b-software').map((q) => q.replace(/\bsoftware\b/i, 'exhibitors')).concat([`${distinctiveTokens(qn).slice(0, 3).join(' ')} exhibitors`]), 'Event exhibitor recall weak — search the event directory, not a generic slice.');
     }
     if (pb === 'b2b-software' || pb === 'regulated-information') {
       push('ecosystem', industrySeedQueries(qn, pb), 'Unknown domain — discover industry vocabulary and catalogues.', ['SEARCH_ENGINE', 'DIRECTORY']);

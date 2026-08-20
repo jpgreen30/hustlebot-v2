@@ -233,6 +233,14 @@ describe('Day-7 delegation decision', () => {
     assert.ok(!slices.some((s) => /pearl|weave|dentrix/i.test(s)));
   });
 
+  test('Qentrax exhibitor slices are event phrases not general', () => {
+    const slices = landscapeSlices('Research up to 15 Affiliate Summit West 2026 exhibitors that may be strategically relevant to Qentrax. Do not contact anyone.');
+    const blob = slices.join(' | ');
+    assert.ok(/affiliate summit|exhibitors/i.test(blob));
+    assert.ok(!slices.includes('general'));
+    assert.ok(!/qentrax-exhibitor-workflow/i.test(blob));
+  });
+
   test('FOG landscape slices are industry compounds not a truncated dump', () => {
     const slices = landscapeSlices('Research the competitive landscape for software and technology used by commercial grease-trap and FOG maintenance service companies in the United States. Identify relevant software providers, adjacent solutions, industry terminology, and the information sources that define this ecosystem. Do not contact anyone.');
     const blob = slices.join(' | ');

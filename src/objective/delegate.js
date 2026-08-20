@@ -33,6 +33,11 @@ export function landscapeSlices(text) {
     if (!out.some((item) => item.toLowerCase() === p.toLowerCase())) out.push(p);
   };
 
+  if (/\bexhibitors?\b/i.test(cleaned)) {
+    const event = cleaned.match(/\b([A-Z][\w&]+(?:\s+[A-Z][\w&]+){1,4}(?:\s+\d{4})?)/);
+    if (event?.[1]) push(`${event[1].trim()} exhibitors`);
+    else push(cleaned.split(/\s+/).slice(0, 6).join(' '));
+  }
   const productRe = /\b((?:ai|virtual)\s+receptionist|[a-z]{3,}(?:\s+[a-z0-9+]{2,}){0,2}\s+(?:apps?|platforms?|software|saas|receptionist))\b/gi;
   let m;
   while ((m = productRe.exec(cleaned))) push(m[1]);
@@ -114,13 +119,14 @@ export function decideDelegation(objective = {}, { catalogue = [] } = {}) {
   }
 
   if (findN >= 12) {
+    const inferred = (slices.length && slices[0] !== 'general') ? slices : landscapeSlices(text);
     return {
       delegate: true,
       reason: `Large set (${findN}) benefits from two bounded scouts rather than one serial discover.`,
       estimatedWorkers: 4,
       estimatedBenefit: 'split discovery queries; shared research/synthesis',
       pattern: 'split-research',
-      slices: slices.length ? slices : [objective.context?.industry || 'general']
+      slices: inferred.length ? inferred : ['general']
     };
   }
 
