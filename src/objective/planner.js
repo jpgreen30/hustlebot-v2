@@ -71,7 +71,9 @@ export function planObjective(objective, catalogue = []) {
         sourceUrl: ctx.sourceUrl || null,
         query: ctx.query || objective.rawRequest,
         maxOrganizations: ctx.findN || 10,
-        url: ctx.sourceUrl || null
+        url: ctx.sourceUrl || null,
+        location: ctx.location || null,
+        industry: ctx.industry || null
       },
       reasonSelected: discoverId === 'org.discover'
         ? 'org.discover inspects the live catalogue and routes to browser extract or web search'

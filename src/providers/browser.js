@@ -260,7 +260,10 @@ export class BrowserRenderProvider {
       }
     }
 
-    const rendered = await this.renderFirecrawl(url, options);
+    const skipFirecrawl = (options.forceUnavailable || []).includes('firecrawl');
+    const rendered = skipFirecrawl
+      ? { status: 'unavailable', provider: 'firecrawl', error: 'firecrawl forced unavailable' }
+      : await this.renderFirecrawl(url, options);
     if (rendered.status === 'ok') {
       const fromRendered = await this.discoverPublicDirectory(url, rendered.html || '', options);
       if (fromRendered.status === 'ok' && fromRendered.records.length) {

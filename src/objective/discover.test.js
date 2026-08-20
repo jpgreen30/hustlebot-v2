@@ -59,4 +59,46 @@ describe('OrgDiscovery search-shaped routing', () => {
     assert.ok(names.includes('Fava Roofing'));
     assert.ok(!names.includes('Yellow Pages'));
   });
+
+  test('encyclopedia search hits are not companies; location+industry seeds a public directory', async () => {
+    const discovery = new OrgDiscovery({
+      search: {
+        search: async () => ({
+          status: 'ok',
+          provider: 'bing',
+          results: [
+            { title: 'Los Angeles - Wikipedia', url: 'https://en.wikipedia.org/wiki/Los_Angeles' },
+            { title: 'Los Angeles | Britannica', url: 'https://www.britannica.com/place/Los-Angeles-California' },
+            { title: 'Los Angeles Times', url: 'https://www.latimes.com' }
+          ]
+        })
+      },
+      spider: {
+        scrape: async (url) => {
+          if (!/yellowpages\.com\/los-angeles-ca\/roofing/.test(url)) {
+            return { status: 'failed', error: `unexpected ${url}` };
+          }
+          return {
+            status: 'ok',
+            provider: 'custom-spider',
+            url,
+            html: '<a class="business-name" href="/mip/lang-roofing-inc">Lang Roofing Inc</a><a class="business-name" href="/mip/fava-roofing">Fava Roofing</a><a class="business-name" href="/mip/dorantes">Dorantes Construction</a>',
+            markdown: '',
+            metadata: { title: 'Roofing Contractors' }
+          };
+        }
+      }
+    });
+    const out = await discovery.discover({
+      query: 'Los Angeles roofing companies',
+      location: 'Los Angeles',
+      industry: 'roofing',
+      maxOrganizations: 5
+    });
+    assert.equal(out.status, 'ok');
+    const names = out.prospects.map((p) => p.organizationName);
+    assert.ok(names.includes('Lang Roofing Inc'));
+    assert.ok(!names.some((n) => /wikipedia|britannica|times/i.test(n)));
+    assert.match(out.reasonSelected, /public business directory|directory pages/i);
+  });
 });

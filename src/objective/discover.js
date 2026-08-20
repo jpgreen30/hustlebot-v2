@@ -3,6 +3,12 @@ import { extractProspectsFromPage } from '../acquisition/extract.js';
 import { mapLimit } from './util.js';
 
 const AGGREGATOR_HOST = /(^|\.)(yelp|angi|thumbtack|bbb|mapquest|forbes|bing|google|duckduckgo|homeguide|ontoplist|expertise|yellowpages|superpages|manta|hotfrog)\.com$|(^|\.)(roof\.info)$/i;
+const JUNK_HOST = /(^|\.)(wikipedia\.org|britannica\.com|latimes\.com|nytimes\.com|washingtonpost\.com|cnn\.com|bbc\.com|merriam-webster\.com|spanishdict\.com|dictionary\.cambridge\.org|collinsdictionary\.com|definitions\.net)$/i;
+const WEAK_QUERY_TOKEN = new Set([
+  'angeles', 'california', 'united', 'states', 'companies', 'company', 'business',
+  'businesses', 'official', 'website', 'south', 'north', 'west', 'east', 'city',
+  'area', 'county', 'region', 'service', 'services'
+]);
 
 function hostOf(url) {
   try {
@@ -15,6 +21,12 @@ function hostOf(url) {
 function isAggregator(url) {
   const host = hostOf(url);
   return !host ? false : AGGREGATOR_HOST.test(host);
+}
+
+function isJunkResult(item = {}) {
+  const url = item.url || item.website || '';
+  const title = item.title || item.organizationName || item.name || '';
+  return JUNK_HOST.test(hostOf(url)) || /wikipedia|britannica|dictionary/i.test(title);
 }
 
 function looksLikeDirectory(item = {}) {
@@ -31,10 +43,30 @@ function queryTokens(query) {
 }
 
 function matchesQuery(item, query) {
-  const tokens = queryTokens(query);
-  if (!tokens.length) return true;
+  const tokens = queryTokens(query).filter((token) => !WEAK_QUERY_TOKEN.has(token));
+  if (!tokens.length) return !isJunkResult(item);
   const hay = `${item.title || ''} ${item.url || ''} ${item.snippet || ''}`.toLowerCase();
   return tokens.some((token) => hay.includes(token));
+}
+
+function publicDirectoryUrls(input = {}) {
+  const industry = String(input.industry || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '');
+  if (!industry || industry.length < 3) return [];
+  let city = String(input.location || '')
+    .toLowerCase()
+    .replace(/[^a-z]+/g, '-')
+    .replace(/^-|-$/g, '');
+  const blob = `${input.location || ''} ${input.query || ''} ${input.objective || ''}`;
+  if (!city && /los angeles|la-area/i.test(blob)) city = 'los-angeles';
+  if (city === 'los-angeles' || city === 'la-area' || city === 'la') city = 'los-angeles-ca';
+  if (!city) return [];
+  return [
+    `https://www.yellowpages.com/${city}/${industry}-contractors`,
+    `https://www.yellowpages.com/${city}/${industry}`
+  ];
 }
 
 function scrapePriority(item = {}) {
@@ -50,6 +82,7 @@ function toProspect(record, sourceUrl, provider) {
   const name = record.organizationName || record.name || record.title || null;
   const website = normalizeUrl(record.website || record.url || record.link || null);
   if (!name && !website) return null;
+  if (isJunkResult({ url: website || sourceUrl, title: name })) return null;
   return {
     organizationName: name || website,
     website,
@@ -86,6 +119,31 @@ export class OrgDiscovery {
     return Boolean(this.browser?.render || this.search?.search || this.spider?.scrape || this.acquisition?.run);
   }
 
+  async extractFromUrls(urls, { max, providers, errors, forceDown }) {
+    const extracted = [];
+    const canSpider = this.spider?.scrape && !forceDown.has('custom-spider') && !forceDown.has('spider');
+    if (!canSpider) return extracted;
+    for (const url of urls) {
+      if (!url || extracted.length >= max) break;
+      const page = await this.spider.scrape(url, { timeout: 15000 });
+      providers.push(page.provider || 'custom-spider');
+      if (page.status !== 'ok') {
+        errors.push({ provider: 'custom-spider', error: page.error || page.status, url });
+        continue;
+      }
+      const found = extractProspectsFromPage({
+        ...page,
+        url: page.finalUrl || url,
+        sourceType: 'directory'
+      });
+      for (const record of found) {
+        const prospect = toProspect(record, record.sourceUrl || url, page.provider || 'custom-spider');
+        if (prospect) extracted.push(prospect);
+      }
+    }
+    return extracted;
+  }
+
   async discover(input = {}, context = {}) {
     const max = Math.min(Number(input.maxOrganizations || input.limit || 10), 12);
     const sourceUrl = input.sourceUrl || input.url || null;
@@ -94,8 +152,12 @@ export class OrgDiscovery {
     const errors = [];
     const providers = [];
 
-    if (sourceUrl && this.browser?.render && !forceDown.has('browser') && !forceDown.has('firecrawl')) {
-      const rendered = await this.browser.render(sourceUrl, { maxRecords: max, waitFor: 4000 });
+    if (sourceUrl && this.browser?.render && !forceDown.has('browser')) {
+      const rendered = await this.browser.render(sourceUrl, {
+        maxRecords: max,
+        waitFor: 4000,
+        forceUnavailable: [...forceDown]
+      });
       providers.push(rendered.provider || 'browser-render');
       if (rendered.status === 'ok' && rendered.records?.length) {
         return {
@@ -118,7 +180,7 @@ export class OrgDiscovery {
           url: page.finalUrl || sourceUrl,
           sourceType: 'directory'
         });
-        const prospects = (extracted.length ? extracted : [{ name: page.title, website: sourceUrl }])
+        const prospects = extracted
           .map((r) => toProspect(r, sourceUrl, 'custom-spider'))
           .filter(Boolean)
           .slice(0, max);
@@ -139,8 +201,7 @@ export class OrgDiscovery {
       const searched = await this.search.search(query, { limit: Math.max(max, 12) });
       providers.push(searched.provider || 'web-search');
       if (searched.status === 'ok' && searched.results?.length) {
-        const relevant = searched.results.filter((item) => matchesQuery(item, query));
-        const pool = relevant.length ? relevant : searched.results;
+        const pool = searched.results.filter((item) => matchesQuery(item, query) && !isJunkResult(item));
         const direct = [];
         const directories = [];
         for (const item of pool) {
@@ -151,31 +212,11 @@ export class OrgDiscovery {
           }
         }
         directories.sort((a, b) => scrapePriority(b) - scrapePriority(a));
-
-        const extracted = [];
-        const canSpider = this.spider?.scrape && !forceDown.has('custom-spider') && !forceDown.has('spider');
-        if (direct.length < max && canSpider) {
-          for (const dir of directories.slice(0, 3)) {
-            if (direct.length + extracted.length >= max) break;
-            const page = await this.spider.scrape(dir.url, { timeout: 15000 });
-            providers.push(page.provider || 'custom-spider');
-            if (page.status !== 'ok') {
-              errors.push({ provider: 'custom-spider', error: page.error || page.status, url: dir.url });
-              continue;
-            }
-            const found = extractProspectsFromPage({
-              ...page,
-              url: page.finalUrl || dir.url,
-              sourceType: 'directory'
-            });
-            for (const record of found) {
-              const prospect = toProspect(record, record.sourceUrl || dir.url, page.provider || 'custom-spider');
-              if (prospect) extracted.push(prospect);
-            }
-          }
-        }
-
-        const prospects = mergeProspects([...direct, ...extracted], max);
+        const extracted = await this.extractFromUrls(
+          directories.map((item) => item.url).slice(0, 3),
+          { max, providers, errors, forceDown }
+        );
+        const prospects = mergeProspects([...extracted, ...direct], max);
         if (prospects.length) {
           return {
             status: 'ok',
@@ -191,6 +232,22 @@ export class OrgDiscovery {
         errors.push({ provider: searched.provider || 'web-search', error: 'search results did not yield organizations' });
       } else {
         errors.push({ provider: searched.provider || 'web-search', error: searched.error || 'no results' });
+      }
+    }
+
+    const seeds = publicDirectoryUrls(input);
+    if (seeds.length && this.spider?.scrape && !forceDown.has('custom-spider') && !forceDown.has('spider')) {
+      const extracted = await this.extractFromUrls(seeds, { max, providers, errors, forceDown });
+      const prospects = mergeProspects(extracted, max);
+      if (prospects.length) {
+        return {
+          status: 'ok',
+          prospects,
+          providers,
+          reasonSelected: 'Used a public business directory constructed from the interpreted location and industry after search did not yield organizations',
+          query,
+          fabricated: false
+        };
       }
     }
 
