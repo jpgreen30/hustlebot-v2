@@ -59,14 +59,34 @@ export class SwarmOrchestrator {
         scope: { findN: objective.context?.findN }
       }));
     }
+    const landscape = /competitive landscape|apps?\b|platforms?\b|parenting|market map/i.test(objective.rawRequest || '')
+      || decision.pattern === 'competitive-landscape';
     const researcher = specialists.find((s) => s.role === 'researcher');
-    if (specialists.length < this.maxWorkersPerObjective - 1 && pickCapability(catalogue, ['contact.discover.batch', 'contact.discover'])) {
+    if (!landscape && specialists.length < this.maxWorkersPerObjective - 1 && pickCapability(catalogue, ['contact.discover.batch', 'contact.discover'])) {
       specialists.push(createSpecialist({
         objective,
         catalogue,
         role: 'contact-researcher',
         mission: 'Find publicly listed decision makers. Do not contact them.',
         dependsOn: researcher ? [researcher.specialistId] : scoutIds
+      }));
+    }
+    if (landscape && specialists.length < this.maxWorkersPerObjective - 1 && pickCapability(catalogue, ['intelligence.research'])) {
+      specialists.push(createSpecialist({
+        objective,
+        catalogue,
+        role: 'source-scout',
+        mission: 'Select and query public sources. Newly discovered sites stay DISCOVERED, not trusted.',
+        dependsOn: scoutIds
+      }));
+    }
+    if (landscape && specialists.length < this.maxWorkersPerObjective && pickCapability(catalogue, ['intelligence.market-map', 'intelligence.verify'])) {
+      specialists.push(createSpecialist({
+        objective,
+        catalogue,
+        role: pickCapability(catalogue, ['intelligence.market-map']) ? 'market-mapper' : 'verifier',
+        mission: 'Map the market from evidence. Gaps are OBSERVED, not a census.',
+        dependsOn: specialists.map((s) => s.specialistId)
       }));
     }
     specialists.push(createSpecialist({
@@ -228,6 +248,9 @@ export class SwarmOrchestrator {
       objective.error = failedCore.map((s) => s.error).filter(Boolean).join('; ');
     }
     this.engine.persist(objective);
+    if (objective.status === OBJECTIVE_STATUS.COMPLETED) {
+      try { await this.engine.ingestIntel?.(objective); } catch { /* intel optional */ }
+    }
     return {
       status: objective.status === OBJECTIVE_STATUS.COMPLETED ? 'ok' : objective.status,
       objective,
@@ -252,7 +275,7 @@ export class SwarmOrchestrator {
       taskClass: specialist.modelTaskClass || TASK_CLASS.CHAT,
       forceUnavailableModels: input.forceUnavailableModels || []
     });
-    if (specialist.role === 'scout' || specialist.role === 'researcher' || specialist.role === 'contact-researcher' || specialist.role === 'repair') {
+    if (specialist.role === 'scout' || specialist.role === 'researcher' || specialist.role === 'contact-researcher' || specialist.role === 'repair' || specialist.role === 'source-scout' || specialist.role === 'entity-researcher') {
       return {
         model: route.selectedModel || route.preferredModel,
         preferredModel: route.preferredModel,
@@ -427,6 +450,63 @@ export class SwarmOrchestrator {
             findings: invocation.result?.prospects || list,
             confidence: 0.6
           });
+        }
+      } else if (specialist.role === 'source-scout') {
+        const cap = pickCapability(catalogue, ['intelligence.research', 'org.discover', 'web.search']);
+        if (!cap || !isGranted(specialist, cap)) {
+          specialist.result = emptyResult('partial', { findings: upstream, unknowns: ['source-scout capability not granted'] });
+        } else {
+          const invocation = await this.invokeGranted(specialist, cap, {
+            question: objective.rawRequest,
+            objective: wrapUntrusted(objective.rawRequest),
+            quantity: specialist.scope?.findN || 10
+          }, context);
+          specialist.executions.push({
+            capability: cap,
+            provider: invocation.provider,
+            status: invocation.success === false ? 'failed' : 'ok',
+            cost: invocation.cost || 0
+          });
+          specialist.result = emptyResult('ok', {
+            findings: invocation.result?.prospects || invocation.result?.entities || upstream,
+            evidence: invocation.result?.evidence || [],
+            confidence: 0.65
+          });
+        }
+      } else if (specialist.role === 'verifier') {
+        const cap = pickCapability(catalogue, ['intelligence.verify']);
+        const first = (upstream[0] || {});
+        if (!cap || !isGranted(specialist, cap)) {
+          specialist.result = emptyResult('partial', { findings: upstream, unknowns: ['verify not granted'] });
+        } else {
+          const invocation = await this.invokeGranted(specialist, cap, {
+            entity: first.organizationName || first.name,
+            predicate: 'described_as'
+          }, context);
+          specialist.executions.push({ capability: cap, provider: invocation.provider, status: 'ok' });
+          specialist.result = emptyResult('ok', {
+            findings: upstream,
+            evidence: invocation.result?.evidence || [],
+            recommendations: [`verify ${invocation.result?.status || 'insufficient-evidence'}`],
+            confidence: 0.5
+          });
+        }
+      } else if (specialist.role === 'market-mapper') {
+        const cap = pickCapability(catalogue, ['intelligence.market-map', 'objective.report']);
+        if (cap && isGranted(specialist, cap)) {
+          const invocation = await this.invokeGranted(specialist, cap, {
+            question: objective.rawRequest,
+            prospects: upstream,
+            objective: objective.rawRequest
+          }, context);
+          specialist.executions.push({ capability: cap, provider: invocation.provider, status: 'ok' });
+          specialist.result = emptyResult('ok', {
+            findings: invocation.result?.entities || invocation.result?.prospects || upstream,
+            recommendations: (invocation.result?.market?.gaps || []).map((g) => g.detail || g),
+            confidence: 0.6
+          });
+        } else {
+          specialist.result = emptyResult('ok', { findings: upstream, confidence: 0.5 });
         }
       } else if (specialist.role === 'synthesizer' || specialist.role === 'comparator') {
         const list = input.findings || upstream;

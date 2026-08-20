@@ -2,6 +2,7 @@ import { newPlanId } from './schema.js';
 import { catalogueHas, isOutboundCapability, pickCapability } from './catalogue.js';
 
 export const MEGA = new Set(['campaign.prepare', 'acquisition.run', 'objective.run', 'n8n:campaign-prepare', 'n8n:campaign-orchestrate']);
+// intelligence.research is a planner-visible primitive, not a mega-pipeline.
 
 function node(id, capabilityId, rest = {}) {
   return {

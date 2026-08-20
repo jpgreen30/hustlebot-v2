@@ -19,7 +19,9 @@ export class DurableRuntime {
     telegram,
     journal,
     memory,
-    scheduler
+    scheduler,
+    supabase,
+    intel
   } = {}) {
     this.dataDir = dataDir;
     mkdirSync(dataDir, { recursive: true });
@@ -28,9 +30,15 @@ export class DurableRuntime {
     this.approvalGate = approvalGate;
     this.n8n = n8n;
     this.redis = redis || null;
+    this.supabase = supabase || null;
+    this.intel = intel || null;
     this.telegram = telegram || null;
     this.journal = journal || new EventJournal({ dir: join(dataDir, 'journal') });
-    this.memory = memory || new OperationalMemory({ dir: join(dataDir, 'memory') });
+    this.memory = memory || new OperationalMemory({
+      dir: join(dataDir, 'memory'),
+      redis: this.redis,
+      supabase: this.supabase
+    });
     this.scheduler = scheduler || new DurableScheduler({
       dir: join(dataDir, 'schedules'),
       journal: this.journal,
@@ -86,7 +94,25 @@ export class DurableRuntime {
     this.registerHandlers();
     await this.loadObjectivesFromRedis();
     try { await this.scheduler.hydrateFromRedis(); } catch { /* optional */ }
+    try {
+      const n = await this.memory.hydrate();
+      logger.info(`Operational memory hydrated ${n} records from Redis/Supabase`);
+    } catch (error) {
+      logger.warn(`Operational memory hydrate skipped: ${error.message}`);
+    }
+    try {
+      const n = await this.intel?.store?.hydrate?.();
+      if (n) logger.info(`Intelligence store hydrated ${n} records`);
+    } catch (error) {
+      logger.warn(`Intel hydrate skipped: ${error.message}`);
+    }
     const recovered = await this.recover();
+    try {
+      recovered.archivedApprovals = await this.archiveStaleTestApprovals();
+    } catch (error) {
+      logger.warn(`Stale approval archive skipped: ${error.message}`);
+      recovered.archivedApprovals = [];
+    }
     this.scheduler.start();
     this.startupReport = recovered;
     logger.info(
@@ -100,6 +126,8 @@ export class DurableRuntime {
     this.engine.journal = this.journal;
     this.engine.operationalMemory = this.memory;
     this.engine.runtime = this;
+    if (this.intel && !this.engine.intel) this.engine.intel = this.intel;
+    if (this.intel) this.intel.operationalMemory = this.memory;
     this.engine.hydrate?.();
   }
 
@@ -163,6 +191,39 @@ export class DurableRuntime {
       deadLetter: deadLetter.length,
       activeObjectiveIds: activeObjectives.map((o) => o.objectiveId)
     };
+  }
+
+  /**
+   * Archive leftover pending outreach approvals that are clearly stale test
+   * artifacts. Never executes them. Never touches fresh pending work.
+   */
+  async archiveStaleTestApprovals({ maxAgeMs = 90 * 60 * 1000 } = {}) {
+    if (!this.approvalGate?.list) return [];
+    let pending = [];
+    try { pending = await this.approvalGate.list({ status: 'pending' }); } catch { return []; }
+    const cutoff = Date.now() - maxAgeMs;
+    const archived = [];
+    for (const item of pending) {
+      const cap = String(item.capabilityId || item.action || '');
+      const created = Number(item.createdAt || 0);
+      const outbound = /outreach\.(execute|email|call)|campaign\.orchestrate|voice\.call/i.test(cap);
+      if (!outbound) continue;
+      if (created && created > cutoff) continue;
+      const rec = await this.approvalGate.cancel(
+        item.id || item.approvalId,
+        'day9-archive',
+        'archived test artifact, never executed; leftover pending outreach from prior acceptance tests'
+      );
+      if (rec) {
+        archived.push({ id: rec.id, capabilityId: rec.capabilityId, notes: rec.notes });
+        this.journal.append({
+          type: 'approval.archived',
+          actor: 'day9-archive',
+          metadata: { approvalId: rec.id, capabilityId: rec.capabilityId, executed: false }
+        });
+      }
+    }
+    return archived;
   }
 
   async runObjectiveJob(payload = {}) {
@@ -347,6 +408,19 @@ export class DurableRuntime {
         approvals: items
       }));
     }
+    if (kind === 'intel' || /evidence|entities|claims|sources used/i.test(query)) {
+      const stats = this.intel?.stats?.() || this.intel?.store?.snapshot?.() || {};
+      const sources = this.intel?.sources?.list?.() || [];
+      return {
+        report: [
+          `entities=${stats.entitiesStored || 0} claims=${stats.claimsStored || 0} evidence=${stats.evidenceRecords || 0}`,
+          `conflicts=${stats.conflictsDetected || 0} stale=${stats.staleClaims || 0} merges=${stats.entityMerges || 0} refusals=${stats.entityMergeRefusals || 0}`,
+          `sources registered: ${sources.map((s) => s.provider).join(', ') || 'none'}`
+        ].join('\n'),
+        stats,
+        sources: sources.map((s) => ({ sourceId: s.sourceId, provider: s.provider, status: s.status, sourceType: s.sourceType }))
+      };
+    }
     return null;
   }
 
@@ -373,10 +447,11 @@ export class DurableRuntime {
       schedules: this.scheduler.inspect(),
       memories: this.memory.list(8),
       journalTail: this.journal.read({ limit: 12 }),
-      mem0: 'not used — operational memory is file-backed with provenance; Mem0 remains optional later for semantic user memory only',
-      redis: this.redis ? 'leases, queue coordination, scheduler leader lock' : 'absent — file store is authoritative',
-      supabase: 'not required for Day-8 job/schedule/memory; existing client remains for users/projects',
-      n8n: 'recorder / workflow provider, not the orchestration brain'
+      mem0: 'not used — operational memory is file+Redis+Supabase with provenance; Mem0 remains optional later for semantic user memory only',
+      redis: this.redis ? 'hot state, locks, leases, queues, intel cache, memory replica' : 'absent — file store is local-only',
+      supabase: this.supabase ? 'durable SoT for operational_memories + intelligence_* JSONB payloads' : 'client absent — Redis replica is the Render-durable fallback',
+      n8n: 'recorder / workflow provider, not the orchestration brain',
+      intel: this.intel?.stats?.() || null
     };
   }
 

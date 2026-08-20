@@ -21,6 +21,7 @@ import { TASK_CLASS } from '../llm/router.js';
 import { decideDelegation } from './delegate.js';
 import { SwarmOrchestrator } from './swarm.js';
 import { SPECIALIST_STATUS } from './specialist.js';
+import { matchIntelControl, formatIntelReply } from '../intel/control.js';
 
 export class MacGyverEngine {
   constructor({
@@ -33,7 +34,8 @@ export class MacGyverEngine {
     fabric,
     journal,
     operationalMemory,
-    runtime
+    runtime,
+    intel
   } = {}) {
     this.registry = registry;
     this.approvalGate = approvalGate;
@@ -45,6 +47,7 @@ export class MacGyverEngine {
     this.journal = journal || null;
     this.operationalMemory = operationalMemory || null;
     this.runtime = runtime || null;
+    this.intel = intel || null;
     this.objectives = new Map();
     this.swarm = new SwarmOrchestrator(this);
     this.hydrate();
@@ -226,6 +229,31 @@ export class MacGyverEngine {
     if (!this.operationalMemory?.recall) return [];
     const q = `${objective.context?.industry || ''} ${objective.context?.location || ''} ${objective.rawRequest || ''}`;
     return this.operationalMemory.recall({ query: q, limit: 5 });
+  }
+
+  async ingestIntel(objective) {
+    if (!this.intel?.ingestProspect || !objective) return null;
+    const prospects = objective.result?.prospects || objective.result?.top || [];
+    const entityIds = [];
+    for (const p of prospects.slice(0, 25)) {
+      try {
+        const row = await this.intel.ingestProspect(p, {
+          request: { objectiveId: objective.objectiveId },
+          query: objective.rawRequest,
+          provider: (objective.result?.providers || [])[0],
+          sourceUrl: p.sourceUrl || p.website,
+          snippet: p.description
+        });
+        if (row?.entity?.entityId) entityIds.push(row.entity.entityId);
+      } catch { /* intel ingest must never fail the objective */ }
+    }
+    objective.intel = {
+      entityIds,
+      sourcesUsed: objective.result?.providers || [],
+      stats: this.intel.stats?.() || {}
+    };
+    this.persist(objective);
+    return objective.intel;
   }
 
   checkpointMemory(objective) {
@@ -556,6 +584,10 @@ export class MacGyverEngine {
       this.persist(objective);
     }
 
+    if (objective.status === OBJECTIVE_STATUS.COMPLETED) {
+      await this.ingestIntel(objective);
+    }
+
     return {
       status: objective.status === OBJECTIVE_STATUS.COMPLETED ? 'ok' : 'failed',
       objective,
@@ -807,10 +839,64 @@ export class MacGyverEngine {
     };
   }
 
+  async controlIntel(matched, record) {
+    if (!this.intel) return { status: 'empty', report: 'Intelligence fabric not initialized.' };
+    const action = matched?.action;
+    if (action === 'why-ranked') {
+      const reply = formatIntelReply(this.intel, record, matched);
+      return reply || { status: 'ok', report: 'No ranked entity is loaded.' };
+    }
+    if (action === 'research-deeper') {
+      if (!record) return { status: 'empty', report: 'No objective is loaded to research deeper.' };
+      const out = await this.intel.research({
+        question: `${record.rawRequest} official websites product homepages`,
+        quantity: record.context?.findN || 10,
+        objectiveId: record.objectiveId,
+        slices: record.context?.slices || []
+      }, {});
+      record.intel = { ...(record.intel || {}), deeper: { sourcesUsed: out.sourcesUsed, entities: (out.entities || []).length } };
+      this.persist(record);
+      return { status: out.status, report: out.report, contacted: false, intel: out };
+    }
+    if (action === 'another-source') {
+      const question = record?.rawRequest || matched.query;
+      const out = await this.intel.research({
+        question,
+        quantity: 5,
+        sourceExclusions: record?.result?.providers || [],
+        objectiveId: record?.objectiveId
+      }, {});
+      return {
+        status: out.status,
+        report: `Tried another source.\n${out.report}`,
+        sourcesSelected: out.sourcesSelected,
+        contacted: false
+      };
+    }
+    if (action === 'verify-claim') {
+      const first = record?.result?.top?.[0] || record?.result?.prospects?.[0];
+      const out = await this.intel.verify({
+        entity: first?.organizationName || first?.name || matched.captured,
+        predicate: 'described_as'
+      });
+      return {
+        status: out.status,
+        report: `Verify ${out.status}. Independent evidence: ${out.independentCount || 0}. ${out.note || ''}`,
+        verification: out,
+        contacted: false
+      };
+    }
+    return formatIntelReply(this.intel, record, matched) || { status: 'ok', report: 'No intelligence action matched.' };
+  }
+
   async control(input = {}) {
     const matched = typeof input === 'string'
       ? matchObjectiveControl(input)
       : (input?.action ? { ...input, query: input.query || input.action } : matchObjectiveControl(input.query || input.action || ''));
+    if (matched && !matched.captured) {
+      const intelMatch = matchIntelControl(matched.query || '');
+      if (intelMatch?.captured) matched.captured = intelMatch.captured;
+    }
     const action = matched?.action || input.action || input.query;
     const inspectActions = new Set(['tools', 'mcp', 'refresh', 'health', 'model', 'web-research']);
     if (inspectActions.has(matched?.action) || inspectActions.has(String(action))) {
@@ -823,6 +909,16 @@ export class MacGyverEngine {
     }
     const swarmActions = new Set(['workers', 'why-delegate', 'worker-models', 'worker-tools', 'worker-findings', 'stop-workers', 'pause']);
     const record = this.get(input.objectiveId || 'latest');
+    const intelInspect = new Set(['know-about', 'sources-used', 'show-evidence', 'uncertain', 'conflicts', 'last-verified']);
+    const intelAct = new Set(['why-ranked', 'research-deeper', 'another-source', 'verify-claim']);
+    if (intelInspect.has(matched?.action)) {
+      if (!this.intel) return { status: 'empty', report: 'Intelligence fabric not initialized.' };
+      const reply = formatIntelReply(this.intel, record, matched);
+      if (reply) return reply;
+    }
+    if (intelAct.has(matched?.action)) {
+      return this.controlIntel(matched, record);
+    }
     if (swarmActions.has(matched?.action)) {
       return this.inspectSwarm(matched || { action, query: input.query || String(action) }, record);
     }

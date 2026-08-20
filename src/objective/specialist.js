@@ -60,6 +60,22 @@ export const ROLE_SPEC = {
   repair: {
     taskClass: TASK_CLASS.EXTRACTION,
     capabilities: ['org.discover', 'company.research', 'company.research.batch', 'web.search']
+  },
+  'source-scout': {
+    taskClass: TASK_CLASS.EXTRACTION,
+    capabilities: ['web.search', 'org.discover', 'intelligence.research']
+  },
+  verifier: {
+    taskClass: TASK_CLASS.REASONING,
+    capabilities: ['intelligence.verify']
+  },
+  'market-mapper': {
+    taskClass: TASK_CLASS.SUMMARIZATION,
+    capabilities: ['intelligence.market-map', 'objective.report']
+  },
+  'entity-researcher': {
+    taskClass: TASK_CLASS.EXTRACTION,
+    capabilities: ['company.research', 'intelligence.inspect', 'web.scrape']
   }
 };
 

@@ -98,6 +98,7 @@ import { matchObjectiveControl, matchObjectiveRun } from './objective/control.js
 import { ToolFabric, registerFabricCapabilities } from './fabric/index.js';
 import { LlmRouter } from './llm/router.js';
 import { DurableRuntime } from './runtime/runtime.js';
+import { IntelStore, IntelligenceFabric, SourceRegistry, registerIntelCapabilities } from './intel/index.js';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -174,6 +175,9 @@ class HustleBotServer {
     this.orgDiscovery = null;
     this.macgyverEngine = null;
     this.durableRuntime = null;
+    this.intelStore = null;
+    this.intelFabric = null;
+    this.sourceRegistry = null;
     // Diagnostics
     this.initializationErrors = [];
   }
@@ -769,6 +773,32 @@ class HustleBotServer {
           this.initializationErrors.push({ module: 'tool-fabric', error: error.message });
           logger.info('✅ Day-5 MacGyver objective engine ready');
         }
+        try {
+          this.intelStore = new IntelStore({
+            dir: join(HUSTLEBOT_DATA_DIR, 'intel'),
+            redis: this.mailbox?.redis || null,
+            supabase: this.db?.client || null
+          });
+          this.sourceRegistry = new SourceRegistry({ store: this.intelStore, fabric: this.toolFabric });
+          this.intelFabric = new IntelligenceFabric({
+            store: this.intelStore,
+            sources: this.sourceRegistry,
+            search: this.webSearchProvider,
+            discovery: this.orgDiscovery,
+            researcher: this.companyResearcher,
+            contactDiscovery: this.contactDiscovery,
+            router: this.llmRouter,
+            fabric: this.toolFabric
+          });
+          if (this.capabilityRegistry) {
+            registerIntelCapabilities(this.capabilityRegistry, this.intelFabric);
+          }
+          this.macgyverEngine.intel = this.intelFabric;
+          logger.info('✅ Day-9 intelligence fabric ready');
+        } catch (error) {
+          logger.warn('⚠️  Day-9 intelligence fabric failed, continuing:', error.message);
+          this.initializationErrors.push({ module: 'intel-fabric', error: error.message });
+        }
       } catch (error) {
         logger.warn('⚠️  Intelligence initialization failed, continuing:', error.message);
         this.initializationErrors.push({ module: 'intelligence', error: error.message });
@@ -807,9 +837,12 @@ class HustleBotServer {
             approvalGate: this.approvalGate,
             n8n: this.n8nIntegration,
             redis: this.mailbox?.redis || null,
+            supabase: this.db?.client || null,
+            intel: this.intelFabric,
             telegram: this.bot
           });
           await this.durableRuntime.start();
+          if (this.intelFabric) this.intelFabric.operationalMemory = this.durableRuntime.memory;
           logger.info('✅ Day-8 durable runtime ready');
         } catch (error) {
           logger.warn('⚠️  Day-8 durable runtime failed, continuing:', error.message);
@@ -926,6 +959,7 @@ class HustleBotServer {
     // Health check
     this.app.get('/health', (req, res) => {
       const runtime = this.durableRuntime?.health?.() || { state: 'UNAVAILABLE', detail: 'not initialized' };
+      const intel = this.intelStore?.snapshot?.() || null;
       res.json({
         status: 'ok',
         timestamp: new Date().toISOString(),
@@ -933,7 +967,8 @@ class HustleBotServer {
         revision: process.env.RENDER_GIT_COMMIT || null,
         api: 'HEALTHY',
         durableRuntime: runtime.state,
-        runtime
+        runtime,
+        intel
       });
     });
 
@@ -2153,7 +2188,146 @@ class HustleBotServer {
       snapshot.queue = this.jobQueue ? await this.jobQueue.getStats() : null;
       snapshot.jobs = this.jobQueue ? await this.jobQueue.listJobs({ limit: 20 }) : [];
       snapshot.approvals = this.approvalGate ? await this.approvalGate.list({ status: 'pending' }).catch(() => []) : [];
+      snapshot.intel = this.intelStore?.snapshot?.() || null;
       res.json(snapshot);
+    });
+
+    this.app.get('/api/intel', this.actionAuth, (req, res) => {
+      if (!this.intelFabric) return res.status(503).json({ error: 'Intelligence fabric not initialized' });
+      const q = String(req.query.q || req.query.entity || '').trim();
+      const stats = this.intelStore.snapshot();
+      const sources = this.sourceRegistry.list().map((s) => ({
+        sourceId: s.sourceId,
+        provider: s.provider,
+        sourceType: s.sourceType,
+        status: s.status,
+        health: s.health,
+        authorityClass: s.authorityClass
+      }));
+      const entity = q ? this.intelFabric.graph.inspectEntity(q) : null;
+      res.json({
+        stats,
+        sources,
+        entity,
+        mem0: 'not source of truth',
+        contacted: false
+      });
+    });
+
+    this.app.get('/api/intel/entity', this.actionAuth, (req, res) => {
+      if (!this.intelFabric) return res.status(503).json({ error: 'Intelligence fabric not initialized' });
+      const q = String(req.query.q || req.query.name || '').trim();
+      if (!q) return res.status(400).json({ error: 'q required' });
+      res.json(this.intelFabric.graph.inspectEntity(q));
+    });
+
+    this.app.post('/api/intel/research', this.actionAuth, this.actionRateLimit, async (req, res) => {
+      try {
+        if (!this.intelFabric) return res.status(503).json({ error: 'Intelligence fabric not initialized' });
+        const result = await this.intelFabric.research(req.body || {}, {
+          forceUnavailable: req.body?.forceUnavailable || [],
+          healthOverlay: this.toolFabric?.healthOverlay?.() || {}
+        });
+        res.json(result);
+      } catch (error) {
+        logger.error(`Intel research error: ${error.message}`);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.post('/api/intel/verify', this.actionAuth, this.actionRateLimit, async (req, res) => {
+      try {
+        if (!this.intelFabric) return res.status(503).json({ error: 'Intelligence fabric not initialized' });
+        res.json(await this.intelFabric.verify(req.body || {}));
+      } catch (error) {
+        logger.error(`Intel verify error: ${error.message}`);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.post('/api/intel/resolve', this.actionAuth, this.actionRateLimit, async (req, res) => {
+      try {
+        if (!this.intelFabric) return res.status(503).json({ error: 'Intelligence fabric not initialized' });
+        const entities = req.body?.entities || [];
+        const results = [];
+        for (const item of entities) {
+          results.push(await this.intelFabric.graph.upsertEntity(item));
+        }
+        res.json({
+          results,
+          stats: this.intelStore.snapshot(),
+          contacted: false,
+          fabricated: false
+        });
+      } catch (error) {
+        logger.error(`Intel resolve error: ${error.message}`);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.post('/api/intel/claim', this.actionAuth, this.actionRateLimit, async (req, res) => {
+      try {
+        if (!this.intelFabric) return res.status(503).json({ error: 'Intelligence fabric not initialized' });
+        const body = req.body || {};
+        let entityId = body.entityId;
+        if (!entityId && body.entity) {
+          const up = await this.intelFabric.graph.upsertEntity({
+            name: body.entity,
+            website: body.website,
+            domain: body.domain
+          });
+          entityId = up.entity.entityId;
+        }
+        const evidenceIds = [];
+        for (const ev of body.evidence || []) {
+          const rec = await this.intelFabric.graph.addEvidence({
+            entityId,
+            ...ev,
+            untrusted: ev.untrusted === true
+          });
+          evidenceIds.push(rec.evidenceId);
+        }
+        const claim = await this.intelFabric.graph.addClaim({
+          subjectEntityId: entityId,
+          predicate: body.predicate,
+          value: body.value,
+          evidenceIds: body.evidenceIds || evidenceIds,
+          status: body.status
+        });
+        res.json({ entityId, claim, stats: this.intelStore.snapshot(), contacted: false });
+      } catch (error) {
+        logger.error(`Intel claim error: ${error.message}`);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.post('/api/intel/control', this.actionAuth, this.actionRateLimit, async (req, res) => {
+      try {
+        if (!this.macgyverEngine) return res.status(503).json({ error: 'MacGyver engine not initialized' });
+        res.json(await this.macgyverEngine.control(req.body || {}));
+      } catch (error) {
+        logger.error(`Intel control error: ${error.message}`);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.get('/day9', (req, res) => {
+      const stats = this.intelStore?.snapshot?.() || {};
+      const sources = this.sourceRegistry?.list?.() || [];
+      const email = this.outreachEmail?.isAvailable?.() ? 'configured' : 'UNAVAILABLE';
+      res.type('html').send(`<!doctype html>
+<html><head><meta charset="utf-8"><title>HustleBot Day-9</title>
+<style>body{font-family:ui-sans-serif,system-ui;background:#0f1419;color:#e7ecf1;margin:0;padding:32px;max-width:1040px}h1{margin:0 0 8px}code,pre{background:#1b232c;padding:12px;border-radius:8px;display:block;overflow:auto} .ok{color:#7dce82}.bad{color:#ff8b8b}</style>
+</head><body>
+<h1>HustleBot Day-9 Intelligence Fabric</h1>
+<p>Evidence graph, source registry, query planner, durable memory. MacGyver remains the brain. n8n records. Mem0 is not the source of truth.</p>
+<p>Email: <span class="${email === 'configured' ? 'ok' : 'bad'}">${email}</span>
+ · Fabric: <span class="${this.intelFabric ? 'ok' : 'bad'}">${this.intelFabric ? 'ready' : 'UNAVAILABLE'}</span></p>
+<h2>Stats</h2>
+<pre>${JSON.stringify(stats, null, 2)}</pre>
+<h2>Sources</h2>
+<pre>${JSON.stringify(sources.map((s) => ({ id: s.sourceId, provider: s.provider, type: s.sourceType, status: s.status })), null, 2)}</pre>
+</body></html>`);
     });
 
     this.app.get('/day8', async (req, res) => {

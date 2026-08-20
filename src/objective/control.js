@@ -27,14 +27,25 @@ const CONTROL_PATTERNS = [
   { action: 'health', re: /is apollo healthy|apollo healthy|provider health|is firecrawl (healthy|up|available)/i },
   { action: 'web-research', re: /what can you use for web research|web research tools/i },
   { action: 'model', re: /which model planned|what model planned|which model (did you|was used)/i },
-  { action: 'refresh', re: /refresh (your )?tools|rediscover tools|mcp\.refresh/i }
+  { action: 'refresh', re: /refresh (your )?tools|rediscover tools|mcp\.refresh/i },
+  { action: 'why-ranked', re: /why is (this|the) company ranked|why (is|was) .+ ranked/i },
+  { action: 'sources-used', re: /what sources did you use|which sources did you use|show (me )?sources/i },
+  { action: 'show-evidence', re: /show me the evidence|what(?:'s| is) the evidence/i },
+  { action: 'uncertain', re: /which facts are uncertain|what is unknown|what(?:'s| is) uncertain/i },
+  { action: 'conflicts', re: /what conflicts did you find|show (me )?conflicts/i },
+  { action: 'last-verified', re: /when was this last verified|last verified/i },
+  { action: 'research-deeper', re: /research this deeper|go deeper|dig deeper/i },
+  { action: 'another-source', re: /find another source|try another source/i },
+  { action: 'verify-claim', re: /verify this claim|verify that/i },
+  { action: 'know-about', re: /what do you know about\s+(.+)/i }
 ];
 
 export function matchObjectiveControl(text) {
   const value = String(text || '').trim();
   if (!value) return null;
   for (const item of CONTROL_PATTERNS) {
-    if (item.re.test(value)) return { action: item.action, query: value };
+    const m = value.match(item.re);
+    if (m) return { action: item.action, query: value, captured: m[1] || null };
   }
   return null;
 }

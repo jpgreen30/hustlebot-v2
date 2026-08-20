@@ -37,7 +37,12 @@ const SIDE_EFFECT_BY_ID = {
   'campaign.prepare': SIDE_EFFECT.LOW_RISK_WRITE,
   'campaign.control': SIDE_EFFECT.LOW_RISK_WRITE,
   'objective.run': SIDE_EFFECT.LOW_RISK_WRITE,
-  'objective.report': SIDE_EFFECT.READ_ONLY
+  'objective.report': SIDE_EFFECT.READ_ONLY,
+  'intelligence.research': SIDE_EFFECT.READ_ONLY,
+  'intelligence.verify': SIDE_EFFECT.READ_ONLY,
+  'intelligence.refresh': SIDE_EFFECT.READ_ONLY,
+  'intelligence.inspect': SIDE_EFFECT.READ_ONLY,
+  'intelligence.market-map': SIDE_EFFECT.READ_ONLY
 };
 
 const TAGS_BY_ID = {
@@ -56,6 +61,11 @@ const TAGS_BY_ID = {
   'prospect.score': ['score', 'rank'],
   'prospect.enrich': ['enrich'],
   'objective.report': ['report'],
+  'intelligence.research': ['research', 'intel'],
+  'intelligence.verify': ['verify', 'intel'],
+  'intelligence.refresh': ['refresh', 'intel'],
+  'intelligence.inspect': ['inspect', 'intel'],
+  'intelligence.market-map': ['research', 'intel'],
   'outreach.email': ['outbound', 'email'],
   'outreach.call': ['outbound', 'voice'],
   'outreach.execute': ['outbound']

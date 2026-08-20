@@ -1,6 +1,7 @@
 import { normalizeDomain, normalizeUrl } from '../acquisition/normalize.js';
 import { extractProspectsFromPage } from '../acquisition/extract.js';
 import { mapLimit } from './util.js';
+import { planSearchQueries } from '../intel/queries.js';
 
 const AGGREGATOR_HOST = /(^|\.)(yelp|angi|thumbtack|bbb|mapquest|forbes|bing|google|duckduckgo|homeguide|ontoplist|expertise|yellowpages|superpages|manta|hotfrog)\.com$|(^|\.)(roof\.info)$/i;
 const JUNK_HOST = /(^|\.)(wikipedia\.org|britannica\.com|latimes\.com|nytimes\.com|washingtonpost\.com|cnn\.com|bbc\.com|merriam-webster\.com|spanishdict\.com|dictionary\.cambridge\.org|collinsdictionary\.com|definitions\.net|wikihow\.com|quora\.com|imdb\.com|abbreviationfinder\.org|acronymfinder\.com)$/i;
@@ -118,10 +119,24 @@ function promoteArticleToCompany(item = {}, intent = {}) {
   if (/\b(medium|substack|blogspot|wordpress|tumblr)\b/i.test(host)) return null;
   const brand = host.split('.')[0];
   if (!brand || brand.length < 4) return null;
-  const pretty = brand.replace(/[-_]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+  const hostPretty = brand.replace(/[-_]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+  const titleClean = String(item.title || item.organizationName || '')
+    .replace(/\s*[|\-–:].*$/, '')
+    .replace(/\s*[—].*$/, '')
+    .trim();
+  const compact = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+  let name = hostPretty;
+  if (
+    titleClean
+    && titleClean.split(/\s+/).length <= 6
+    && compact(titleClean).includes(compact(brand))
+    && !/^\d+\s+(best|top)|week[- ]by[- ]week|symptoms|what is/i.test(titleClean)
+  ) {
+    name = titleClean;
+  }
   return {
-    title: pretty,
-    organizationName: pretty,
+    title: name,
+    organizationName: name,
     url: `https://${host}`,
     website: `https://${host}`,
     snippet: item.snippet || item.title || '',
@@ -325,13 +340,15 @@ export class OrgDiscovery {
     }
 
     if (query && this.search?.search && !forceDown.has('web-search') && !forceDown.has('search')) {
-      const queries = [query];
-      const wantProducts = /\b(app|apps|platform|product|saas|software|marketplace)\b/i.test(`${query} ${input.objective || ''}`);
-      if (intent.wantCompanies && wantProducts && !intent.wantMedical) {
-        const compact = String(query).split(/[.!?]/)[0].slice(0, 90).trim();
-        const extra = `${compact} companies products official site`.replace(/\s+/g, ' ').trim();
-        if (extra && extra !== query) queries.push(extra);
-      }
+      const planned = planSearchQueries({
+        question: `${query} ${input.objective || ''}`.trim(),
+        query,
+        geography: input.location || null,
+        slices: input.slices || [],
+        maxQueries: 5
+      });
+      const queries = planned.length ? planned.map((p) => p.query) : [query];
+      if (!queries.includes(query)) queries.unshift(query);
       const primaryResults = [];
       const extraResults = [];
       const seenUrls = new Set();

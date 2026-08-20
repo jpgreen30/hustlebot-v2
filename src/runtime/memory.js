@@ -15,10 +15,12 @@ export const MEMORY_TYPE = {
 const UNTRUSTED_MARK = '[UNTRUSTED]';
 
 export class OperationalMemory {
-  constructor({ dir, retentionMs } = {}) {
+  constructor({ dir, retentionMs, redis, supabase } = {}) {
     this.dir = dir;
     mkdirSync(dir, { recursive: true });
     this.retentionMs = retentionMs ?? 90 * 24 * 3600 * 1000;
+    this.redis = redis || null;
+    this.supabase = supabase || null;
   }
 
   pathFor(id) {
@@ -54,7 +56,57 @@ export class OperationalMemory {
       }
     };
     atomicWrite(this.pathFor(rec.memoryId), rec);
+    this.persistDurable(rec);
     return rec;
+  }
+
+  persistDurable(rec) {
+    const work = [];
+    if (this.redis?.set) {
+      work.push(
+        this.redis.set(`hustlebot:memory:${rec.memoryId}`, JSON.stringify(rec), 'EX', 90 * 24 * 3600)
+          .then(() => this.redis.sadd?.('hustlebot:memories', rec.memoryId))
+          .catch(() => {})
+      );
+    }
+    if (this.supabase?.from) {
+      work.push(
+        this.supabase.from('operational_memories').upsert({
+          id: rec.memoryId,
+          payload: rec,
+          updated_at: rec.createdAt
+        }).then((res) => res).catch(() => {})
+      );
+    }
+    return Promise.all(work);
+  }
+
+  async hydrate() {
+    let n = 0;
+    if (this.supabase?.from) {
+      try {
+        const { data } = await this.supabase.from('operational_memories').select('id,payload').limit(500);
+        for (const row of data || []) {
+          const rec = row.payload;
+          if (!rec?.memoryId) continue;
+          atomicWrite(this.pathFor(rec.memoryId), rec);
+          n++;
+        }
+      } catch { /* table may be missing */ }
+    }
+    if (this.redis?.smembers) {
+      try {
+        const ids = await this.redis.smembers('hustlebot:memories');
+        for (const id of ids || []) {
+          if (existsSync(this.pathFor(id))) continue;
+          const raw = await this.redis.get(`hustlebot:memory:${id}`);
+          if (!raw) continue;
+          atomicWrite(this.pathFor(id), JSON.parse(raw));
+          n++;
+        }
+      } catch { /* optional */ }
+    }
+    return n;
   }
 
   get(id) {
@@ -114,6 +166,7 @@ export class OperationalMemory {
     rec.expiresAt = new Date().toISOString();
     rec.confidence = 0;
     atomicWrite(this.pathFor(id), rec);
+    this.persistDurable(rec);
     return true;
   }
 

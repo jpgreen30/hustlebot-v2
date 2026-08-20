@@ -161,7 +161,19 @@ export async function collectDay1Health(server = {}) {
     return { state: 'UNAVAILABLE', detail: 'durable runtime not initialized' };
   });
 
-  const services = { telegram, deepgram, openrouter, retell, n8n, heygen, redis, supabase, firecrawl, spider, browser, apollo, email, durableRuntime };
+  const intel = await safe('intel', async () => {
+    if (!server.intelFabric && !server.intelStore) {
+      return { state: 'UNAVAILABLE', detail: 'intelligence fabric not initialized' };
+    }
+    const stats = server.intelStore?.snapshot?.() || {};
+    return {
+      state: 'HEALTHY',
+      detail: `entities=${stats.entitiesStored || 0} claims=${stats.claimsStored || 0} evidence=${stats.evidenceRecords || 0}`,
+      ...stats
+    };
+  });
+
+  const services = { telegram, deepgram, openrouter, retell, n8n, heygen, redis, supabase, firecrawl, spider, browser, apollo, email, durableRuntime, intel };
   for (const [name, value] of Object.entries(services)) {
     if (!STATES.includes(value.state)) {
       services[name] = { state: 'UNVERIFIED', detail: `invalid state from ${name}` };

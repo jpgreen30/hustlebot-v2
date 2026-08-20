@@ -162,6 +162,50 @@ async function migrate() {
       if (!e.message.includes('already exists')) throw e;
     });
 
+    logger.info('Creating Day-9 intelligence tables...');
+    const intelSql = `
+      CREATE TABLE IF NOT EXISTS operational_memories (
+        id TEXT PRIMARY KEY,
+        payload JSONB NOT NULL,
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      );
+      CREATE TABLE IF NOT EXISTS intelligence_entities (
+        id TEXT PRIMARY KEY,
+        payload JSONB NOT NULL,
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      );
+      CREATE TABLE IF NOT EXISTS intelligence_aliases (
+        id TEXT PRIMARY KEY,
+        payload JSONB NOT NULL,
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      );
+      CREATE TABLE IF NOT EXISTS intelligence_sources (
+        id TEXT PRIMARY KEY,
+        payload JSONB NOT NULL,
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      );
+      CREATE TABLE IF NOT EXISTS intelligence_claims (
+        id TEXT PRIMARY KEY,
+        payload JSONB NOT NULL,
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      );
+      CREATE TABLE IF NOT EXISTS intelligence_evidence (
+        id TEXT PRIMARY KEY,
+        payload JSONB NOT NULL,
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      );
+      CREATE TABLE IF NOT EXISTS intelligence_relations (
+        id TEXT PRIMARY KEY,
+        payload JSONB NOT NULL,
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      );
+    `;
+    await supabase.rpc('exec', { sql: intelSql }).catch(e => {
+      if (!e.message.includes('already exists')) {
+        logger.warn(`Intelligence tables via exec rpc: ${e.message}`);
+      }
+    });
+
     logger.info('✅ Database migration completed successfully!');
     logger.info('');
     logger.info('Tables created:');
@@ -171,6 +215,8 @@ async function migrate() {
     logger.info('  • transactions - Cost tracking');
     logger.info('  • agent_logs - Execution history');
     logger.info('  • memory - Learnings & patterns');
+    logger.info('  • operational_memories - Day-9 durable operational memory');
+    logger.info('  • intelligence_* - Day-9 evidence graph (entities, aliases, sources, claims, evidence, relations)');
 
     process.exit(0);
   } catch (error) {

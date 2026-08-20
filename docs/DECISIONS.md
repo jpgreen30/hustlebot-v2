@@ -4,6 +4,32 @@
 
 ---
 
+## Entry 00D9: Day-9 persistent intelligence fabric + evidence graph
+
+**Date**: 2026-08-20  
+**Decision**: Compose intelligence primitives over existing MacGyver + Tool Fabric + Redis + filesystem + ApprovalGate. Do not introduce Neo4j/Memgraph/Weaviate/Pinecone/LangGraph/CrewAI. Mem0 is not the source of truth. n8n records, does not own research.
+
+### Persistence
+
+- **Supabase** (preferred durable SoT): JSONB payload tables `operational_memories`, `intelligence_entities`, `intelligence_aliases`, `intelligence_sources`, `intelligence_claims`, `intelligence_evidence`, `intelligence_relations`. Fail open if tables/RLS are missing.
+- **Redis**: hot entity/source cache, `hustlebot:intel:{kind}:{id}` replica, operational memory replica `hustlebot:memory:{id}`. Survives Render disk reset. Not the only copy of durable evidence when Supabase is present.
+- **Filesystem** (`HUSTLEBOT_DATA_DIR/intel`, `/memory`): local tests and process-death recovery. Insufficient alone on Render.
+- **Mem0**: still a historical stub. Never jobs, evidence, or factual records.
+
+### Evidence graph
+
+Relational records (entity / alias / claim / evidence / relation / source) in Maps + JSONB. Strong keys merge (canonical domain, provider ID, normalized legal/trade name without conflicting domain, acronym expansion without conflicting domain). Same name + different domains refuse merge.
+
+### Source selection
+
+SourceRegistry + Tool Fabric policy. Live health overlay wins over operational memory. DISCOVERED sources are not auto-trusted. intelligence.research is planner-visible and is **not** a mega-capability; org.discover remains the discovery primitive.
+
+### Outbound
+
+Unchanged. Discovery is not permission to contact. ApprovalGate remains the gate.
+
+---
+
 ## Entry 00D8: Day-8 durable runtime, scheduler, operational memory
 
 **Date**: 2026-08-20  

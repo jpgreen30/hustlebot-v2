@@ -419,13 +419,17 @@ class ApprovalGate {
     return this.decide(id, { decision: 'modify', by, modifiedInputs, notes });
   }
 
-  async cancel(id, by = 'system') {
+  async cancel(id, by = 'system', notes = null) {
     const record = await this.get(id);
     if (!record || TERMINAL.has(record.status)) return null;
     record.status = APPROVAL_STATUS.CANCELLED;
     record.decidedBy = by;
     record.decidedAt = Date.now();
+    record.notes = notes || 'cancelled';
     await this.store.save(record);
+    if (this.onDecision) {
+      try { await this.onDecision(record); } catch { /* audit sink optional */ }
+    }
     return record;
   }
 
