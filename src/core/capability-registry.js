@@ -109,6 +109,12 @@ class CapabilityRegistry {
       requiresApproval: descriptor.requiresApproval || false,
       handler: descriptor.handler,
       isAvailable: descriptor.isAvailable || (() => true),
+      sideEffect: descriptor.sideEffect || null,
+      tags: descriptor.tags || [],
+      retryPolicy: descriptor.retryPolicy || null,
+      idempotent: descriptor.idempotent ?? null,
+      prerequisites: descriptor.prerequisites || [],
+      costCategory: descriptor.costCategory || null,
       // Observed, as opposed to declared. Routing prefers observed once
       // there is enough evidence to trust it.
       stats: {
@@ -349,6 +355,12 @@ class CapabilityRegistry {
         failureModes: entry.failureModes,
         fallbackProvider: entry.fallbackProvider,
         requiresApproval: entry.requiresApproval,
+        sideEffect: entry.sideEffect,
+        tags: entry.tags,
+        retryPolicy: entry.retryPolicy,
+        idempotent: entry.idempotent,
+        prerequisites: entry.prerequisites,
+        costCategory: entry.costCategory,
         available: (() => {
           try { return entry.isAvailable() !== false; } catch { return false; }
         })(),
