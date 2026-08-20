@@ -99,6 +99,12 @@ function pathOf(url) {
 
 export function distinctiveTokens(question = '') {
   const raw = String(question || '');
+  const playbook = inferPlaybookClass(raw);
+  const skip = new Set();
+  if (playbook === 'local-business') {
+    skip.add('receptionist');
+    skip.add('answering');
+  }
   const out = [];
   for (const m of raw.matchAll(/\b[a-z]{3,}(?:-[a-z]{3,})+\b/gi)) {
     out.push(m[0].toLowerCase());
@@ -112,6 +118,7 @@ export function distinctiveTokens(question = '') {
   for (const t of raw.toLowerCase().split(/[^a-z0-9]+/)) {
     if (!t) continue;
     if (GENERIC_NOUN.has(t) && !CATEGORY_KEEP.has(t)) continue;
+    if (skip.has(t)) continue;
     if (t.length >= 6 || CATEGORY_KEEP.has(t)) out.push(t);
   }
   return [...new Set(out)];

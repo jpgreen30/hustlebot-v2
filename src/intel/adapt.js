@@ -88,7 +88,7 @@ export function proposeAdaptations({ quality, request, previousQueries = [], voc
     if (pb === 'product-landscape' && /pregnan|parenting/i.test(qn)) {
       push('category-to-product', ['official app website', 'tracker app official site'], 'Wrong entity types occupied slots — search first-party product homepages.');
     }
-    if (/\breceptionist\b/i.test(qn)) {
+    if (/\breceptionist\b/i.test(qn) && pb === 'product-landscape') {
       push('synonym', ['virtual receptionist software', 'AI phone answering'], 'Category synonym queries after junk occupied slots.');
     }
     if (pb === 'b2b-software' || pb === 'regulated-information') {

@@ -404,5 +404,11 @@ describe('Day-10 playbooks are classes not vendor lists', () => {
   test('LA roofing companies that could use a receptionist stay local-business', () => {
     const q = 'Find up to 10 legitimate roofing companies in Los Angeles that show evidence of sufficient operating scale to be plausible users of an AI receptionist. Do not contact anyone.';
     assert.equal(inferPlaybookClass(q), 'local-business');
+    const voksha = classifySearchResult({
+      title: 'Voksha - AI Receptionist for Small Businesses',
+      url: 'https://voksha.com',
+      snippet: '24/7 AI receptionist for SaaS and local businesses'
+    }, q);
+    assert.notEqual(voksha.role, RESULT_ROLE.CANDIDATE);
   });
 });
