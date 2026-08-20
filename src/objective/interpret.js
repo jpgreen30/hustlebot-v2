@@ -59,7 +59,11 @@ export function interpretObjective(raw, extra = {}) {
   const query = extra.query
     || (industryMatch
       ? `${locationMatch?.[0] || ''} ${industryMatch} companies`.replace(/\s+/g, ' ').trim()
-      : null);
+      : text
+        .replace(/^(research|find|discover|rank|compare)\s+\d*\s*/i, '')
+        .replace(/\bdo not contact anyone\.?/i, '')
+        .trim()
+        .slice(0, 180));
 
   const interpretedGoal = trivial
     ? 'Lookup a live capability result. Do not spawn specialists.'

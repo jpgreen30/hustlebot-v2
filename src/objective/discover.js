@@ -9,7 +9,8 @@ const VIDEO_HOST = /(^|\.)(youtube\.com|youtu\.be|vimeo\.com|dailymotion\.com)$/
 const WEAK_QUERY_TOKEN = new Set([
   'angeles', 'california', 'united', 'states', 'companies', 'company', 'business',
   'businesses', 'official', 'website', 'south', 'north', 'west', 'east', 'city',
-  'area', 'county', 'region', 'service', 'services'
+  'area', 'county', 'region', 'service', 'services', 'research', 'compare',
+  'relevant', 'positioning', 'presence', 'anyone', 'contact', 'platforms'
 ]);
 
 function hostOf(url) {
@@ -48,6 +49,8 @@ function looksLikeArticle(item = {}) {
   if (/:\s*(medlineplus|cleveland clinic|mayo clinic|cdc|wikipedia|britannica)\b/i.test(title)) return true;
   if (/\b(symptoms|treatment|diagnosis|what is|overview|fact sheet)\b/i.test(title) && CLINICAL_HOST.test(hostOf(url))) return true;
   if (/^\d+\s+(best|top)\b/i.test(title)) return true;
+  if (/\b(what is|definition,|types, methods|beginner's guide|how to (start|do))\b/i.test(title)) return true;
+  if (/(researchgate\.net|scribbr\.com|questionpro\.com|researchmethod\.net|ideascale\.com)$/i.test(hostOf(url))) return true;
   return false;
 }
 
