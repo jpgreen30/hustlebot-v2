@@ -109,6 +109,27 @@ function looksLikeDirectory(item = {}) {
   return /(best |top \d+|directory|companylist|contractors in|list of|near me)/.test(hay);
 }
 
+function promoteArticleToCompany(item = {}, intent = {}) {
+  if (!intent.wantCompanies || intent.wantMedical) return null;
+  if (!looksLikeArticle(item)) return null;
+  const url = item.url || item.website || '';
+  const host = hostOf(url);
+  if (!host || JUNK_HOST.test(host) || CLINICAL_HOST.test(host) || VIDEO_HOST.test(host) || isAggregator(url)) return null;
+  if (/\b(medium|substack|blogspot|wordpress|tumblr)\b/i.test(host)) return null;
+  const brand = host.split('.')[0];
+  if (!brand || brand.length < 4) return null;
+  const pretty = brand.replace(/[-_]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+  return {
+    title: pretty,
+    organizationName: pretty,
+    url: `https://${host}`,
+    website: `https://${host}`,
+    snippet: item.snippet || item.title || '',
+    description: item.snippet || item.title || '',
+    promotedFrom: url
+  };
+}
+
 function queryTokens(query) {
   return String(query || '')
     .toLowerCase()
@@ -335,8 +356,12 @@ export class OrgDiscovery {
       const mergedResults = [...primaryResults, ...extraResults];
       if (mergedResults.length && lastSearched) {
         const extraSet = new Set(extraResults.map((item) => String(item.url || '').toLowerCase()));
-        const pool = mergedResults.filter((item) => {
+        const pool = mergedResults.map((item) => {
+          if (isJunkResult(item, intent)) return promoteArticleToCompany(item, intent);
+          return item;
+        }).filter(Boolean).filter((item) => {
           if (isJunkResult(item, intent)) return false;
+          if (item.promotedFrom) return looksLikeCompany(item);
           if (extraSet.has(String(item.url || '').toLowerCase())) {
             return looksLikeCompany(item) || looksLikeDirectory(item);
           }

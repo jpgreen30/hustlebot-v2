@@ -162,6 +162,30 @@ describe('OrgDiscovery search-shaped routing', () => {
     assert.ok(!out.prospects.some((p) => /cleveland|cdc|wikipedia|youtube|week-by-week|Preparing for a Baby|\/pregnancy$/i.test(`${p.organizationName} ${p.website}`)));
   });
 
+  test('product-site article URLs promote to the first-party company homepage', async () => {
+    const discovery = new OrgDiscovery({
+      search: {
+        search: async () => ({
+          status: 'ok',
+          provider: 'bing',
+          results: [
+            { title: 'Pregnancy week-by-week calendar', url: 'https://www.babycenter.com/pregnancy/week-by-week', snippet: 'Pregnancy tracker articles' },
+            { title: 'Pregnancy - Cleveland Clinic', url: 'https://my.clevelandclinic.org/health/articles/pregnancy', snippet: 'Clinical overview' }
+          ]
+        })
+      }
+    });
+    const out = await discovery.discover({
+      query: 'pregnancy apps and parenting platforms',
+      objective: 'Research 10 pregnancy apps and parenting platforms. Do not contact anyone.',
+      maxOrganizations: 8
+    });
+    assert.equal(out.status, 'ok');
+    assert.ok(out.prospects.some((p) => /babycenter/i.test(`${p.organizationName} ${p.website}`)));
+    assert.ok(!out.prospects.some((p) => /cleveland/i.test(`${p.organizationName} ${p.website}`)));
+    assert.ok(!out.prospects.some((p) => /week-by-week/i.test(p.website || '')));
+  });
+
   test('roofing search does not keep dictionary or abbreviation hits that fail the query', async () => {
     const discovery = new OrgDiscovery({
       search: {

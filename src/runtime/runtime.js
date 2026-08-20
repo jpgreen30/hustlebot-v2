@@ -339,7 +339,13 @@ export class DurableRuntime {
       };
     }
     if (kind === 'approvals') {
-      return { report: 'Ask “what is waiting for approval?” against the latest objective.' };
+      if (!this.approvalGate?.list) return { report: 'Approval gate not initialized.' };
+      return this.approvalGate.list({ status: 'pending' }).then((items) => ({
+        report: items.length
+          ? items.map((a) => `${a.id || a.approvalId} · ${a.status} · ${a.capabilityId || a.action || 'action'} · ${a.createdAt || ''}`).join('\n')
+          : 'No pending approvals.',
+        approvals: items
+      }));
     }
     return null;
   }
