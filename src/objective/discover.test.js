@@ -186,6 +186,50 @@ describe('OrgDiscovery search-shaped routing', () => {
     assert.ok(!out.prospects.some((p) => /week-by-week/i.test(p.website || '')));
   });
 
+  test('promoted first-party title is preferred when it matches the host', async () => {
+    const discovery = new OrgDiscovery({
+      search: {
+        search: async () => ({
+          status: 'ok',
+          provider: 'bing',
+          results: [
+            { title: 'What to Expect - Pregnancy week-by-week calendar', url: 'https://www.whattoexpect.com/pregnancy/week-by-week', snippet: 'Pregnancy tracker articles' }
+          ]
+        })
+      }
+    });
+    const out = await discovery.discover({
+      query: 'pregnancy apps and parenting platforms',
+      objective: 'Research 10 pregnancy apps. Do not contact anyone.',
+      maxOrganizations: 5
+    });
+    assert.equal(out.status, 'ok');
+    assert.equal(out.prospects[0].organizationName, 'What to Expect');
+    assert.match(out.prospects[0].website, /whattoexpect\.com/);
+  });
+
+  test('off-topic university writing-center hits are not pregnancy apps', async () => {
+    const discovery = new OrgDiscovery({
+      search: {
+        search: async () => ({
+          status: 'ok',
+          provider: 'bing',
+          results: [
+            { title: 'Semicolons, colons, and dashes – The Writing Center', url: 'https://writingcenter.unc.edu/tips-and-tools/semicolons/', snippet: 'To join sentences. You can use a colon to connect two sentences' },
+            { title: 'Peanut App', url: 'https://www.peanut-app.io', snippet: 'Social network app for women and mothers' }
+          ]
+        })
+      }
+    });
+    const out = await discovery.discover({
+      query: 'pregnancy apps and parenting platforms',
+      objective: 'Research 10 pregnancy apps. Do not contact anyone.',
+      maxOrganizations: 5
+    });
+    assert.ok(out.prospects.some((p) => /peanut/i.test(p.organizationName)));
+    assert.ok(!out.prospects.some((p) => /writing|semicolon|unc\.edu/i.test(`${p.organizationName} ${p.website}`)));
+  });
+
   test('roofing search does not keep dictionary or abbreviation hits that fail the query', async () => {
     const discovery = new OrgDiscovery({
       search: {

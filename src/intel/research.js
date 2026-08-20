@@ -5,6 +5,7 @@
 
 import { looksLikeCompany, isJunkResult, discoveryIntent, commercialScore } from '../objective/discover.js';
 import { wrapUntrusted } from '../objective/context-pack.js';
+import { extractSlices } from '../objective/quantities.js';
 import {
   createIntelligenceRequest, CLAIM_STATUS, TRUST_CLASS, EVIDENCE_BUDGET, INTEL_INTENT, SOURCE_KIND
 } from './schema.js';
@@ -19,6 +20,19 @@ function firstParty(url, domain) {
   } catch {
     return false;
   }
+}
+
+function discoveryHints(request, input = {}) {
+  const question = request.question || '';
+  const slices = (Array.isArray(input.slices) && input.slices.length)
+    ? input.slices
+    : extractSlices(question);
+  const geography = request.geography
+    || input.location
+    || (question.match(/\b(los angeles|la-area|southern california|van nuys|california)\b/i)?.[0] || null);
+  const industry = slices.find((s) => /roofing|solar|hvac|insurance|logistics|freight|trucking|warehous|home-service/i.test(s))
+    || null;
+  return { geography, industry, slices };
 }
 
 export class IntelligenceFabric {
@@ -72,9 +86,11 @@ export class IntelligenceFabric {
       memory,
       forceUnavailable: context.forceUnavailable || []
     });
+    const hints = discoveryHints(request, input);
     const queries = planSearchQueries({
       ...request,
-      slices: input.slices || [],
+      slices: hints.slices,
+      geography: hints.geography,
       query: request.question
     });
     const startedAt = Date.now();
@@ -145,7 +161,9 @@ export class IntelligenceFabric {
         query: request.question,
         objective: request.question,
         maxOrganizations: request.quantity,
-        location: request.geography
+        location: hints.geography,
+        industry: hints.industry,
+        slices: hints.slices
       }, context);
       for (const p of fallback.prospects || []) {
         findings.push(await this.ingestProspect(p, {

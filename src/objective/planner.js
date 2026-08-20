@@ -102,7 +102,8 @@ export function planObjective(objective, catalogue = []) {
         maxOrganizations: ctx.findN || 10,
         url: ctx.sourceUrl || null,
         location: ctx.location || null,
-        industry: ctx.industry || null
+        industry: ctx.industry || null,
+        slices: ctx.slices || []
       },
       reasonSelected: reasonFor(catalogue, discoverId, 'discovery')
     }));

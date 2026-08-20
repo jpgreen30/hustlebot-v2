@@ -11,7 +11,8 @@ const WEAK_QUERY_TOKEN = new Set([
   'angeles', 'california', 'united', 'states', 'companies', 'company', 'business',
   'businesses', 'official', 'website', 'south', 'north', 'west', 'east', 'city',
   'area', 'county', 'region', 'service', 'services', 'research', 'compare',
-  'relevant', 'positioning', 'presence', 'anyone', 'contact', 'platforms'
+  'relevant', 'positioning', 'presence', 'anyone', 'contact', 'platforms',
+  'audience', 'public', 'major', 'differentiators', 'experience'
 ]);
 
 function hostOf(url) {
@@ -28,6 +29,46 @@ function pathOf(url) {
   } catch {
     return '';
   }
+}
+
+function compactAlnum(s) {
+  return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
+
+function nameFromTitleMatchingHost(title, brand) {
+  const want = compactAlnum(brand);
+  if (!want || want.length < 4) return null;
+  const raw = String(title || '').replace(/\s+/g, ' ').trim();
+  if (!raw) return null;
+  const candidates = [raw.replace(/\s*[|\-–—:].*$/, '').trim(), raw];
+  const tokens = raw.split(/\s+/).map((t) => t.replace(/^[^\w]+|[^\w]+$/g, '')).filter(Boolean);
+  for (let n = Math.min(6, tokens.length); n >= 1; n -= 1) {
+    for (let i = 0; i + n <= tokens.length; i += 1) {
+      candidates.push(tokens.slice(i, i + n).join(' '));
+    }
+  }
+  for (const candidate of candidates) {
+    const cc = compactAlnum(candidate);
+    if (!cc) continue;
+    if ((cc === want || cc.includes(want)) && candidate.split(/\s+/).length <= 6
+      && !/^\d+\s+(best|top)|week[- ]by[- ]week|symptoms|what is/i.test(candidate)) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+function preferDisplayName(current, incoming) {
+  if (!incoming) return current;
+  if (!current) return incoming;
+  const cc = compactAlnum(current);
+  const ci = compactAlnum(incoming);
+  if (!ci) return current;
+  if (ci === cc || (cc && (ci.includes(cc) || cc.includes(ci)))) {
+    const score = (n) => (/\s/.test(n) ? 12 : 0) + Math.min(String(n).length, 48);
+    return score(incoming) > score(current) ? incoming : current;
+  }
+  return current;
 }
 
 export function discoveryIntent(query = '', objective = '') {
@@ -120,16 +161,17 @@ function promoteArticleToCompany(item = {}, intent = {}) {
   const brand = host.split('.')[0];
   if (!brand || brand.length < 4) return null;
   const hostPretty = brand.replace(/[-_]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+  const fromTitle = nameFromTitleMatchingHost(item.title || item.organizationName || '', brand);
   const titleClean = String(item.title || item.organizationName || '')
     .replace(/\s*[|\-–:].*$/, '')
     .replace(/\s*[—].*$/, '')
     .trim();
-  const compact = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
-  let name = hostPretty;
+  let name = fromTitle || hostPretty;
   if (
-    titleClean
+    !fromTitle
+    && titleClean
     && titleClean.split(/\s+/).length <= 6
-    && compact(titleClean).includes(compact(brand))
+    && compactAlnum(titleClean).includes(compactAlnum(brand))
     && !/^\d+\s+(best|top)|week[- ]by[- ]week|symptoms|what is/i.test(titleClean)
   ) {
     name = titleClean;
@@ -152,11 +194,37 @@ function queryTokens(query) {
     .filter((token) => token.length > 4);
 }
 
+function hayHasToken(hay, token) {
+  if (!token) return false;
+  try {
+    return new RegExp(`\\b${token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(hay);
+  } catch {
+    return hay.includes(token);
+  }
+}
+
 function matchesQuery(item, query) {
   const tokens = queryTokens(query).filter((token) => !WEAK_QUERY_TOKEN.has(token));
+  const q = String(query || '').toLowerCase();
+  if (/\bapps?\b/.test(q)) tokens.push('app', 'apps');
   if (!tokens.length) return !isJunkResult(item, discoveryIntent(query));
   const hay = `${item.title || ''} ${item.url || ''} ${item.snippet || ''}`.toLowerCase();
-  return tokens.some((token) => hay.includes(token));
+  return tokens.some((token) => hayHasToken(hay, token) || (token.length > 4 && hay.includes(token)));
+}
+
+function onTopic(item, query, intent = {}) {
+  const host = hostOf(item.url || item.website);
+  if (/\.(edu|gov)$/i.test(host) && !/\b(university|college|school|government|campus)\b/i.test(query)) {
+    return false;
+  }
+  const hay = `${item.title || ''} ${item.snippet || ''}`.toLowerCase();
+  if (/\b(semicolon|writing center|grammar exercise|punctuation guide)\b/i.test(hay)) return false;
+  if (matchesQuery(item, query)) return true;
+  if (intent.wantCompanies && /\b(app|apps|platform|software|saas|tracker|marketplace|contractor)\b/i.test(`${hay} ${host}`)) {
+    return true;
+  }
+  if (looksLikeDirectory(item)) return true;
+  return false;
 }
 
 function publicDirectoryUrls(input = {}) {
@@ -209,7 +277,14 @@ function mergeProspects(list, max) {
   for (const prospect of list) {
     if (!prospect) continue;
     const key = (prospect.domain || prospect.organizationName || '').toLowerCase().trim();
-    if (!key || seen.has(key)) continue;
+    if (!key) continue;
+    if (seen.has(key)) {
+      const existing = out.find((p) => (p.domain || p.organizationName || '').toLowerCase().trim() === key);
+      if (existing) {
+        existing.organizationName = preferDisplayName(existing.organizationName, prospect.organizationName);
+      }
+      continue;
+    }
     seen.add(key);
     out.push(prospect);
     if (out.length >= max) break;
@@ -344,11 +419,10 @@ export class OrgDiscovery {
         question: `${query} ${input.objective || ''}`.trim(),
         query,
         geography: input.location || null,
-        slices: input.slices || [],
-        maxQueries: 5
+        slices: (Array.isArray(input.slices) && input.slices.length) ? input.slices : undefined,
+        maxQueries: intent.wantCompanies ? 7 : 5
       });
       const queries = planned.length ? planned.map((p) => p.query) : [query];
-      if (!queries.includes(query)) queries.unshift(query);
       const primaryResults = [];
       const extraResults = [];
       const seenUrls = new Set();
@@ -364,7 +438,7 @@ export class OrgDiscovery {
             const url = String(item.url || '').toLowerCase();
             if (!url || seenUrls.has(url)) continue;
             seenUrls.add(url);
-            bucket.push(item);
+            bucket.push({ ...item, _query: q });
           }
         } else {
           errors.push({ provider: searched.provider || 'web-search', error: searched.error || 'no results', query: q });
@@ -374,15 +448,21 @@ export class OrgDiscovery {
       if (mergedResults.length && lastSearched) {
         const extraSet = new Set(extraResults.map((item) => String(item.url || '').toLowerCase()));
         const pool = mergedResults.map((item) => {
-          if (isJunkResult(item, intent)) return promoteArticleToCompany(item, intent);
+          if (isJunkResult(item, intent)) {
+            const promoted = promoteArticleToCompany(item, intent);
+            if (promoted) promoted._query = item._query;
+            return promoted;
+          }
           return item;
         }).filter(Boolean).filter((item) => {
           if (isJunkResult(item, intent)) return false;
+          const topicalQuery = item._query || query;
+          if (!onTopic(item, topicalQuery, intent) && !onTopic(item, query, intent)) return false;
           if (item.promotedFrom) return looksLikeCompany(item);
           if (extraSet.has(String(item.url || '').toLowerCase())) {
             return looksLikeCompany(item) || looksLikeDirectory(item);
           }
-          return matchesQuery(item, query);
+          return matchesQuery(item, query) || looksLikeCompany(item);
         });
         const direct = [];
         const directories = [];

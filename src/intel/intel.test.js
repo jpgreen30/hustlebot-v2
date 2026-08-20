@@ -8,7 +8,7 @@ import { EvidenceGraph, decideMerge, normalizeAlias } from './graph.js';
 import { planSearchQueries } from './queries.js';
 import { SourceRegistry } from './sources.js';
 import { IntelligenceFabric } from './research.js';
-import { CLAIM_STATUS, TRUST_CLASS, INTEL_INTENT } from './schema.js';
+import { CLAIM_STATUS, TRUST_CLASS, INTEL_INTENT, inferIntent } from './schema.js';
 import { matchIntelControl } from './control.js';
 import { TOOL_HEALTH } from '../fabric/descriptor.js';
 import { wrapUntrusted } from '../objective/context-pack.js';
@@ -44,6 +44,18 @@ describe('Day-9 query planner', () => {
     assert.ok(plan.some((p) => /pregnancy apps/i.test(p.query)));
     assert.ok(plan.some((p) => /parenting platforms/i.test(p.query)));
     assert.ok(!/babycenter|what to expect|peanut/i.test(blob));
+    const nounAt = plan.findIndex((p) => /pregnancy apps/i.test(p.query));
+    const primaryAt = plan.findIndex((p) => p.reason === 'primary objective');
+    assert.ok(nounAt >= 0 && (primaryAt < 0 || nounAt <= primaryAt));
+  });
+
+  test('empty slices still extract local-industry queries from the question', () => {
+    const plan = planSearchQueries({
+      question: 'Find 5 Los Angeles roofing companies. Do not contact anyone.',
+      geography: 'Los Angeles',
+      slices: []
+    });
+    assert.ok(plan.some((p) => /roofing/i.test(p.query)));
   });
 });
 
@@ -210,6 +222,40 @@ describe('Day-9 research fabric', () => {
       assert.equal(out.contacted, false);
       assert.ok(out.entities.length >= 1);
       assert.equal(out.entities[0].name, 'Harbor Dental AI');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('do-not-contact does not classify the request as ENRICH', () => {
+    assert.equal(
+      inferIntent('Find 5 Los Angeles roofing companies. Do not contact anyone.'),
+      INTEL_INTENT.DISCOVER
+    );
+  });
+
+  test('source-failure fallback passes inferred industry into org.discover', async () => {
+    const { dir, store } = tmpStore();
+    try {
+      let seen = null;
+      const fabric = new IntelligenceFabric({
+        store,
+        search: {
+          search: async () => ({ status: 'failed', provider: 'bing', error: 'preferred search unavailable', results: [] })
+        },
+        discovery: {
+          discover: async (input) => {
+            seen = input;
+            return { status: 'ok', prospects: [], providers: ['custom-spider'] };
+          }
+        }
+      });
+      await fabric.research({
+        question: 'Find 5 Los Angeles roofing companies. Do not contact anyone.',
+        quantity: 5
+      }, { forceUnavailable: ['web-search'] });
+      assert.equal(seen.industry, 'roofing');
+      assert.match(String(seen.location || ''), /los angeles/i);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

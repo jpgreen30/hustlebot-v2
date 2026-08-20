@@ -86,9 +86,9 @@ export function inferIntent(text = '') {
   if (/\bverify|confirm|is it true\b/i.test(value)) return INTEL_INTENT.VERIFY;
   if (/\bcompar|vs\.?|versus\b/i.test(value)) return INTEL_INTENT.COMPARE;
   if (/\bmap the|landscape|market map\b/i.test(value)) return INTEL_INTENT.MARKET_MAP;
-  if (/\benrich|decision maker|contact\b/i.test(value)) return INTEL_INTENT.ENRICH;
-  if (/\bexplain|why\b/i.test(value)) return INTEL_INTENT.EXPLAIN;
-  if (/\bmonitor|watch|track\b/i.test(value)) return INTEL_INTENT.MONITOR;
+  if (/\benrich\b/i.test(value) || /\bdecision maker\b/i.test(value)) return INTEL_INTENT.ENRICH;
+  if (/\bexplain|why ranked|why is this\b/i.test(value)) return INTEL_INTENT.EXPLAIN;
+  if (/\bmonitor|watch\b/i.test(value) && !/\bweek[- ]by[- ]week\b/i.test(value)) return INTEL_INTENT.MONITOR;
   if (/\bfind|discover|identify\b/i.test(value)) return INTEL_INTENT.DISCOVER;
   return INTEL_INTENT.RESEARCH;
 }

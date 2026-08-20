@@ -62,6 +62,8 @@ export function interpretObjective(raw, extra = {}) {
       : text
         .replace(/^(research|find|discover|rank|compare)\s+\d*\s*/i, '')
         .replace(/\bdo not contact anyone\.?/i, '')
+        .replace(/\b(use public evidence|compare their [^.]*)/gi, '')
+        .replace(/\s+/g, ' ')
         .trim()
         .slice(0, 180));
 

@@ -12,6 +12,10 @@ function compact(text) {
   return String(text || '')
     .replace(/^(research|find|discover|rank|compare|map|identify)\s+\d*\s*/i, '')
     .replace(/\bdo not contact anyone\.?/gi, '')
+    .replace(/\b(use public evidence|don't contact|do not contact).*$/gi, '')
+    .replace(/\bcompare (their|the)\b[^.]*/gi, '')
+    .replace(/\bidentify (providers|evidence|public pricing)\b[^.]*/gi, '')
+    .replace(/\brelevant to [A-Za-z0-9][\w.-]*/gi, '')
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -19,7 +23,8 @@ function compact(text) {
 export function planSearchQueries(input = {}) {
   const question = String(input.question || input.query || input.rawRequest || '');
   const geography = input.geography || input.location || null;
-  const slices = (input.slices || extractSlices(question)).filter(Boolean);
+  const givenSlices = Array.isArray(input.slices) && input.slices.length ? input.slices : null;
+  const slices = (givenSlices || extractSlices(question)).filter(Boolean);
   const primary = compact(question).split(/[.!?]/)[0].slice(0, 140).trim() || question.slice(0, 140);
   const wantProducts = /\b(app|apps|platform|product|saas|software|marketplace|tracker)\b/i.test(question);
   const out = [];
@@ -33,7 +38,19 @@ export function planSearchQueries(input = {}) {
     out.push({ query: q, reason, fromSlice, producedEvidence: [] });
   };
 
-  push(primary, 'primary objective');
+  const phrases = question.match(NOUN) || [];
+  for (const phrase of phrases.slice(0, 4)) {
+    push(phrase.trim(), 'noun phrase from objective');
+  }
+  for (const phrase of phrases.slice(0, 4)) {
+    const trimmed = phrase.trim();
+    if (/platforms?$/i.test(trimmed)) {
+      push(trimmed.replace(/platforms?$/i, 'apps'), 'platform-to-app expansion');
+    }
+    if (/apps?$/i.test(trimmed)) {
+      push(trimmed.replace(/apps?$/i, 'tracker'), 'adjacent product noun');
+    }
+  }
 
   for (const slice of slices.slice(0, 4)) {
     const loc = geography ? `${slice} ${geography}` : slice;
@@ -41,25 +58,26 @@ export function planSearchQueries(input = {}) {
     if (wantProducts) push(`${slice} app official site`, 'first-party product homepage', slice);
   }
 
-  const phrases = question.match(NOUN) || [];
-  for (const phrase of phrases.slice(0, 4)) {
-    push(phrase, 'noun phrase from objective');
-  }
+  push(primary, 'primary objective');
+
   for (const phrase of phrases.slice(0, 4)) {
     if (wantProducts) {
-      push(`${phrase} official website`, 'product official site');
-      push(`${phrase} companies`, 'commercial entities');
+      push(`${phrase.trim()} official website`, 'product official site');
+      push(`${phrase.trim()} companies`, 'commercial entities');
     }
   }
   if (wantProducts) {
     for (const phrase of phrases.slice(0, 2)) {
-      push(`${phrase} site:apps.apple.com`, 'app-store listings');
-      push(`${phrase} site:producthunt.com`, 'product directory');
+      push(`${phrase.trim()} site:apps.apple.com`, 'app-store listings');
+      push(`${phrase.trim()} site:play.google.com`, 'play-store listings');
+      push(`${phrase.trim()} site:producthunt.com`, 'product directory');
     }
   }
 
   if (geography && !slices.length) {
     push(`${geography} ${primary}`.slice(0, 120), 'geography-constrained');
+  } else if (geography && wantProducts) {
+    push(`${primary} ${geography}`.slice(0, 120), 'geography-constrained');
   }
 
   if (input.intent === INTEL_INTENT.VERIFY && input.entityName) {
@@ -72,7 +90,8 @@ export function planSearchQueries(input = {}) {
     push(`${primary} pricing`, 'market-map public pricing');
   }
 
-  return out.slice(0, Number(input.maxQueries || 5));
+  const cap = Number(input.maxQueries || (wantProducts ? 7 : 5));
+  return out.slice(0, cap);
 }
 
 export function recordQueryHit(plan, query, evidenceIds = []) {
