@@ -23,7 +23,7 @@ import { SwarmOrchestrator } from './swarm.js';
 import { SPECIALIST_STATUS } from './specialist.js';
 import { matchIntelControl, formatIntelReply } from '../intel/control.js';
 import { evaluateResearch, QUALITY } from '../intel/quality.js';
-import { classifySearchResult, RESULT_ROLE } from '../intel/classify.js';
+import { classifySearchResult, RESULT_ROLE, inferPlaybookClass } from '../intel/classify.js';
 import { proposeAdaptations } from '../intel/adapt.js';
 
 export class MacGyverEngine {
@@ -531,6 +531,7 @@ export class MacGyverEngine {
       const comparison = compareNode?.comparison || compareNode?.result || reportNode?.comparison || null;
       const rejected = [];
       const accepted = [];
+      const playbook = inferPlaybookClass(objective.rawRequest || '');
       for (const p of prospects) {
         const classified = classifySearchResult({
           title: p.organizationName || p.name,
@@ -540,7 +541,8 @@ export class MacGyverEngine {
         const structuralJunk = (classified.reasons || []).some((r) =>
           /listicle|directory|apk-mirror|clinical|entertainment|encyclopedia|generic-ai|package-tracker|publication|retail-catalog/i.test(r)
         );
-        if (classified.role === RESULT_ROLE.CANDIDATE || (!structuralJunk && p.website && classified.reasons?.includes('off-topic'))) {
+        const researchedLocal = playbook === 'local-business' && (p.contacts?.length || p.contact) && classified.reasons?.includes('off-topic');
+        if (classified.role === RESULT_ROLE.CANDIDATE || (!structuralJunk && researchedLocal && p.website)) {
           accepted.push(p);
         } else {
           rejected.push({ title: p.organizationName || p.name, url: p.website, reason: classified.reasons.join(',') });
