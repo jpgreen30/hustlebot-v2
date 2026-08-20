@@ -45,11 +45,13 @@ function looksLikeArticle(item = {}) {
   const url = item.url || item.website || '';
   const title = String(item.title || item.organizationName || item.name || '');
   const path = pathOf(url);
-  if (/\/(wiki|health\/articles?|health\/diseases|topics?|encyclopedia|learn\/|article\/|news\/)/i.test(path)) return true;
+  if (/\/(wiki|health\/articles?|health\/diseases|topics?|encyclopedia|learn\/|article\/|news\/|blog\/|guides?\/)/i.test(path)) return true;
   if (/:\s*(medlineplus|cleveland clinic|mayo clinic|cdc|wikipedia|britannica)\b/i.test(title)) return true;
   if (/\b(symptoms|treatment|diagnosis|what is|overview|fact sheet)\b/i.test(title) && CLINICAL_HOST.test(hostOf(url))) return true;
   if (/^\d+\s+(best|top)\b/i.test(title)) return true;
   if (/\b(what is|definition,|types, methods|beginner's guide|how to (start|do))\b/i.test(title)) return true;
+  if (/\bweek[- ]by[- ]week\b|\bsymptoms\s*(&|and)\s*signs\b|\bbaby development\b|\btrimester (guide|calendar)\b/i.test(title)) return true;
+  if (/week-by-week|symptoms-and-signs|baby-development/i.test(path)) return true;
   if (/(researchgate\.net|scribbr\.com|questionpro\.com|researchmethod\.net|ideascale\.com)$/i.test(hostOf(url))) return true;
   return false;
 }
@@ -301,16 +303,42 @@ export class OrgDiscovery {
     }
 
     if (query && this.search?.search && !forceDown.has('web-search') && !forceDown.has('search')) {
-      const searched = await this.search.search(query, { limit: Math.max(max, 12) });
-      providers.push(searched.provider || 'web-search');
-      if (searched.status === 'ok' && searched.results?.length) {
-        const pool = searched.results.filter((item) => matchesQuery(item, query) && !isJunkResult(item, intent));
+      const queries = [query];
+      const wantProducts = /\b(app|apps|platform|product|saas|software|marketplace)\b/i.test(`${query} ${input.objective || ''}`);
+      if (intent.wantCompanies && wantProducts && !intent.wantMedical) {
+        const compact = String(query).split(/[.!?]/)[0].slice(0, 90).trim();
+        const extra = `${compact} companies products official site`.replace(/\s+/g, ' ').trim();
+        if (extra && extra !== query) queries.push(extra);
+      }
+      const mergedResults = [];
+      const seenUrls = new Set();
+      let lastSearched = null;
+      for (const q of queries) {
+        const searched = await this.search.search(q, { limit: Math.max(max, 12) });
+        lastSearched = searched;
+        providers.push(searched.provider || 'web-search');
+        if (searched.status === 'ok' && searched.results?.length) {
+          for (const item of searched.results) {
+            const url = String(item.url || '').toLowerCase();
+            if (!url || seenUrls.has(url)) continue;
+            seenUrls.add(url);
+            mergedResults.push(item);
+          }
+        } else {
+          errors.push({ provider: searched.provider || 'web-search', error: searched.error || 'no results', query: q });
+        }
+      }
+      if (mergedResults.length && lastSearched) {
+        const pool = mergedResults.filter((item) => {
+          if (isJunkResult(item, intent)) return false;
+          return matchesQuery(item, query) || looksLikeCompany(item) || looksLikeDirectory(item);
+        });
         const direct = [];
         const directories = [];
         for (const item of pool) {
           if (looksLikeDirectory(item) && !looksLikeCompany(item)) directories.push(item);
           else {
-            const prospect = toProspect(item, item.url, searched.provider);
+            const prospect = toProspect(item, item.url, lastSearched.provider);
             if (prospect && !isAggregator(prospect.website) && !isJunkResult(prospect, intent)) {
               prospect._score = commercialScore(item, intent);
               direct.push(prospect);
@@ -336,15 +364,15 @@ export class OrgDiscovery {
             prospects,
             providers,
             reasonSelected: extracted.length
-              ? `Used ${searched.provider || 'web-search'} then extracted organizations from public directory pages`
-              : `Used ${searched.provider || 'web-search'} because the objective is a search (no directory URL required)`,
+              ? `Used ${lastSearched.provider || 'web-search'} then extracted organizations from public directory pages`
+              : `Used ${lastSearched.provider || 'web-search'} because the objective is a search (no directory URL required)`,
             query,
             fabricated: false
           };
         }
-        errors.push({ provider: searched.provider || 'web-search', error: 'search results did not yield organizations' });
-      } else {
-        errors.push({ provider: searched.provider || 'web-search', error: searched.error || 'no results' });
+        errors.push({ provider: lastSearched.provider || 'web-search', error: 'search results did not yield organizations' });
+      } else if (!mergedResults.length) {
+        errors.push({ provider: lastSearched?.provider || 'web-search', error: lastSearched?.error || 'no results' });
       }
     }
 

@@ -271,6 +271,24 @@ describe('MacGyver catalogue + planner', () => {
     assert.ok(validation.errors.some((e) => /outbound|prohibited/i.test(e)));
   });
 
+  test('app/platform landscape skips lead-buyer qualification so products survive', () => {
+    const objective = interpretObjective(
+      'Research 10 pregnancy apps and parenting platforms relevant to BabyToBloom. Compare their positioning and public web presence. Do not contact anyone.'
+    );
+    const plan = planObjective(objective, inspectCatalogue(macgyverRegistry()));
+    const ids = plan.nodes.map((n) => n.capabilityId);
+    assert.ok(ids.includes('org.discover'));
+    assert.ok(ids.includes('company.research.batch'));
+    assert.ok(ids.includes('objective.report'));
+    assert.ok(!ids.includes('contact.discover.batch'));
+    assert.ok(!ids.includes('prospect.qualify'));
+    const report = plan.nodes.find((n) => n.id === 'report');
+    assert.deepEqual(report.dependsOn, ['research']);
+    assert.equal(report.inputs.prospects.$ref, 'research.prospects');
+    const validation = validatePlan(plan, { catalogue: inspectCatalogue(macgyverRegistry()), objective });
+    assert.equal(validation.ok, true);
+  });
+
   test('roofing objective uses search-shaped discovery, not a prebuilt workflow id', () => {
     const objective = interpretObjective(
       'Find five Los Angeles-area roofing companies, research what services they offer, identify publicly available decision makers where possible, and rank which three look best for a future AI receptionist offer. Do not contact anyone.'
@@ -413,6 +431,11 @@ describe('MacGyver telegram/NL', () => {
   test('control phrases map to objective.control and research maps to objective.run', () => {
     assert.equal(matchObjectiveControl('Show me the plan.').action, 'plan');
     assert.equal(matchObjectiveControl('What failed?').action, 'failed');
+    assert.equal(matchObjectiveControl('What is queued?').action, 'queue');
+    assert.equal(matchObjectiveControl('What is scheduled?').action, 'scheduled');
+    assert.equal(matchObjectiveControl('What ran overnight?').action, 'overnight');
+    assert.equal(matchObjectiveControl('What do you remember?').action, 'memory-inspect');
+    assert.equal(matchObjectiveControl('What is waiting for approval?').action, 'approvals-inspect');
     assert.ok(matchObjectiveRun('Find 10 Affiliate Summit companies and rank them. Do not contact anyone.'));
     assert.equal(matchObjectiveRun('Prepare an outreach campaign'), null);
     const detector = new IntentDetector({ llm: null, registry: new CapabilityRegistry() });
@@ -548,6 +571,16 @@ describe('Day-6 MacGyver logistics + fabric + router', () => {
     assert.equal(refresh.capabilityId, 'mcp.refresh');
     const logistics = detector.hintObjectiveRunIntent('Research three Los Angeles logistics companies and compare them. Do not contact anyone.');
     assert.equal(logistics.capabilityId, 'objective.run');
+  });
+
+  test('HTTP query-only control inspects persisted queue state', async () => {
+    const engine = new MacGyverEngine({
+      registry: macgyverRegistry(),
+      runtime: { inspect: async (kind) => ({ report: `inspect:${kind}` }) }
+    });
+    const out = await engine.control({ query: 'What is queued?' });
+    assert.equal(out.status, 'ok');
+    assert.match(out.report, /inspect:queue/);
   });
 
   test('Is Apollo healthy reports enrichment/contact providers', async () => {

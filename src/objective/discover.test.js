@@ -141,6 +141,7 @@ describe('OrgDiscovery search-shaped routing', () => {
             { title: 'CDC Pregnancy', url: 'https://www.cdc.gov/pregnancy/index.html', snippet: 'CDC guidelines' },
             { title: 'Pregnancy - Wikipedia', url: 'https://en.wikipedia.org/wiki/Pregnancy' },
             { title: 'Best pregnancy apps YouTube', url: 'https://www.youtube.com/watch?v=abc123', snippet: 'Video roundup' },
+            { title: 'Pregnancy week-by-week calendar', url: 'https://www.babycenter.com/pregnancy/week-by-week', snippet: 'Symptoms and signs by week' },
             { title: 'Peanut App', url: 'https://www.peanut-app.io', snippet: 'Social network app for women and mothers' },
             { title: 'The Bump', url: 'https://www.thebump.com', snippet: 'Pregnancy and baby tracking app' },
             { title: 'Ovia Health', url: 'https://www.oviahealth.com', snippet: 'Pregnancy tracker app and platform' },
@@ -157,7 +158,7 @@ describe('OrgDiscovery search-shaped routing', () => {
     assert.equal(out.status, 'ok');
     const names = out.prospects.map((p) => p.organizationName).join(' ');
     assert.match(names, /Peanut|Ovia|Bump|What to Expect/i);
-    assert.ok(!out.prospects.some((p) => /cleveland|cdc|wikipedia|youtube/i.test(`${p.organizationName} ${p.website}`)));
+    assert.ok(!out.prospects.some((p) => /cleveland|cdc|wikipedia|youtube|week-by-week/i.test(`${p.organizationName} ${p.website}`)));
   });
 });
 

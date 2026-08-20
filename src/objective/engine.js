@@ -806,7 +806,9 @@ export class MacGyverEngine {
   }
 
   async control(input = {}) {
-    const matched = typeof input === 'string' ? matchObjectiveControl(input) : input;
+    const matched = typeof input === 'string'
+      ? matchObjectiveControl(input)
+      : (input?.action ? { ...input, query: input.query || input.action } : matchObjectiveControl(input.query || input.action || ''));
     const action = matched?.action || input.action || input.query;
     const inspectActions = new Set(['tools', 'mcp', 'refresh', 'health', 'model', 'web-research']);
     if (inspectActions.has(matched?.action) || inspectActions.has(String(action))) {

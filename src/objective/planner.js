@@ -114,50 +114,61 @@ export function planObjective(objective, catalogue = []) {
       reasonSelected: reasonFor(catalogue, researchId, 'company research')
     }));
 
-    const contactId = requireCap(catalogue, ['contact.discover.batch', 'contact.discover'], 'contact discovery');
-    nodes.push(node('contacts', contactId, {
-      description: 'Find publicly listed decision makers',
-      dependsOn: ['research'],
-      inputs: {
-        prospects: { $ref: 'research.prospects' },
-        objective: objective.rawRequest,
-        qualificationProfile: ctx.profileId || 'qentrax-buyer'
-      },
-      reasonSelected: reasonFor(catalogue, contactId, 'contact discovery')
-    }));
+    const landscape = /(apps?\b|platforms?\b|competitive landscape|parenting)/i.test(objective.rawRequest || '');
 
-    if (catalogueHas(catalogue, 'prospect.qualify')) {
-      nodes.push(node('qualify', 'prospect.qualify', {
-        description: 'Qualify prospects against the profile',
-        dependsOn: ['contacts'],
+    let lastRef = 'research.prospects';
+    let lastDepends = ['research'];
+
+    if (!landscape) {
+      const contactId = requireCap(catalogue, ['contact.discover.batch', 'contact.discover'], 'contact discovery');
+      nodes.push(node('contacts', contactId, {
+        description: 'Find publicly listed decision makers',
+        dependsOn: ['research'],
         inputs: {
-          prospects: { $ref: 'contacts.prospects' },
+          prospects: { $ref: 'research.prospects' },
           objective: objective.rawRequest,
           qualificationProfile: ctx.profileId || 'qentrax-buyer'
         },
-        reasonSelected: reasonFor(catalogue, 'prospect.qualify', 'qualification')
+        reasonSelected: reasonFor(catalogue, contactId, 'contact discovery')
       }));
-    }
+      lastRef = 'contacts.prospects';
+      lastDepends = ['contacts'];
 
-    const scoreDepends = catalogueHas(catalogue, 'prospect.qualify') ? ['qualify'] : ['contacts'];
-    const scoreRef = catalogueHas(catalogue, 'prospect.qualify') ? 'qualify.prospects' : 'contacts.prospects';
-    if (catalogueHas(catalogue, 'prospect.score')) {
-      nodes.push(node('score', 'prospect.score', {
-        description: 'Score and rank prospects',
-        dependsOn: scoreDepends,
-        inputs: { prospects: { $ref: scoreRef }, topN: ctx.topN || 5 },
-        reasonSelected: reasonFor(catalogue, 'prospect.score', 'ranking')
-      }));
+      if (catalogueHas(catalogue, 'prospect.qualify')) {
+        nodes.push(node('qualify', 'prospect.qualify', {
+          description: 'Qualify prospects against the profile',
+          dependsOn: ['contacts'],
+          inputs: {
+            prospects: { $ref: 'contacts.prospects' },
+            objective: objective.rawRequest,
+            qualificationProfile: ctx.profileId || 'qentrax-buyer'
+          },
+          reasonSelected: reasonFor(catalogue, 'prospect.qualify', 'qualification')
+        }));
+        lastRef = 'qualify.prospects';
+        lastDepends = ['qualify'];
+      }
+
+      if (catalogueHas(catalogue, 'prospect.score')) {
+        nodes.push(node('score', 'prospect.score', {
+          description: 'Score and rank prospects',
+          dependsOn: lastDepends,
+          inputs: { prospects: { $ref: lastRef }, topN: ctx.topN || 5 },
+          reasonSelected: reasonFor(catalogue, 'prospect.score', 'ranking')
+        }));
+        lastRef = 'score.prospects';
+        lastDepends = ['score'];
+      }
+    } else {
+      reasons.push('Landscape/app/platform research skips lead-buyer qualification so products are not dropped as non-Qentrax leads.');
     }
 
     if (catalogueHas(catalogue, 'objective.report')) {
-      const reportDepends = catalogueHas(catalogue, 'prospect.score') ? ['score'] : scoreDepends;
-      const reportRef = catalogueHas(catalogue, 'prospect.score') ? 'score.prospects' : scoreRef;
       nodes.push(node('report', 'objective.report', {
         description: 'Summarize top results against success criteria',
-        dependsOn: reportDepends,
+        dependsOn: lastDepends,
         inputs: {
-          prospects: { $ref: reportRef },
+          prospects: { $ref: lastRef },
           topN: ctx.topN || 5,
           objective: objective.rawRequest
         },
