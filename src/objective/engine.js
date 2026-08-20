@@ -372,15 +372,33 @@ export class MacGyverEngine {
       }
     }
 
-    const reportNode = outputs.compare || outputs.report || outputs.score || outputs.qualify || outputs.contacts || outputs.research || outputs.discover;
-    const prospects = reportNode?.top || reportNode?.prospects || [];
-    objective.result = {
-      prospects,
-      top: (reportNode?.top || prospects).slice(0, objective.context?.topN || 5),
-      report: reportNode?.report || reportNode?.comparison || this.formatResult(objective, prospects),
-      comparison: reportNode?.comparison || null,
-      providers: [...new Set(objective.executions.map((e) => e.provider).filter(Boolean))]
-    };
+    const reportNode = outputs.compare || outputs.report || outputs.score || outputs.qualify || outputs.contacts || outputs.research || outputs.discover || outputs.lookup;
+    if (plan.pattern === 'direct_capability' || outputs.lookup) {
+      const packed = outputs.lookup || {};
+      const lookup = packed.result && typeof packed.result === 'object' ? packed.result : packed;
+      const now = lookup.now || lookup.utc || packed.now || null;
+      objective.result = {
+        lookup,
+        now,
+        timezone: lookup.timezone || 'UTC',
+        prospects: [],
+        top: [],
+        report: now
+          ? `Current UTC time: ${now}. Timezone UTC. Workers spawned: 0. Direct capability ${plan.nodes?.[0]?.capabilityId}.`
+          : (lookup.text || this.formatResult(objective, [])),
+        providers: [...new Set(objective.executions.map((e) => e.provider).filter(Boolean))],
+        contacted: false
+      };
+    } else {
+      const prospects = reportNode?.top || reportNode?.prospects || [];
+      objective.result = {
+        prospects,
+        top: (reportNode?.top || prospects).slice(0, objective.context?.topN || 5),
+        report: reportNode?.report || reportNode?.comparison || this.formatResult(objective, prospects),
+        comparison: reportNode?.comparison || null,
+        providers: [...new Set(objective.executions.map((e) => e.provider).filter(Boolean))]
+      };
+    }
     const failed = (plan.nodes || []).filter((n) => n.status === 'failed');
     const discoverDone = completed.has('discover')
       || completed.has('lookup')
@@ -392,7 +410,7 @@ export class MacGyverEngine {
     objective.contacted = false;
     this.persist(objective);
 
-    if (this.router && objective.status === OBJECTIVE_STATUS.COMPLETED) {
+    if (this.router && objective.status === OBJECTIVE_STATUS.COMPLETED && plan.pattern !== 'direct_capability') {
       const wantsCompare = (objective.successCriteria || []).some((s) => s.type === 'comparison')
         || /compar/i.test(objective.rawRequest || '');
       if (wantsCompare) {
@@ -420,7 +438,7 @@ export class MacGyverEngine {
       }
     }
 
-    if (this.n8n?.execute && objective.status === OBJECTIVE_STATUS.COMPLETED) {
+    if (this.n8n?.execute && objective.status === OBJECTIVE_STATUS.COMPLETED && plan.pattern !== 'direct_capability') {
       const wf = await this.n8n.execute('campaign-prepare', {
         objectiveId: objective.objectiveId,
         planId: plan.planId,

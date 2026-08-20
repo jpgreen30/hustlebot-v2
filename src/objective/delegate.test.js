@@ -325,6 +325,7 @@ describe('Day-7 engine direct vs delegated', () => {
       assert.equal(out.plan.nodes.length, 1);
       assert.match(out.plan.nodes[0].capabilityId, /public\.time/);
       assert.equal(out.status, 'ok');
+      assert.match(String(out.result?.now || out.result?.report || ''), /T/);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
