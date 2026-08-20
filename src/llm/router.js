@@ -45,7 +45,8 @@ export class LlmRouter {
     const all = modelsForTask(this.models, taskClass)
       .filter((m) => m.enabled && m.health !== 'UNAVAILABLE');
     const preferred = all[0]?.modelId || null;
-    const list = all.filter((m) => !this.forcedDown.has(m.modelId));
+    const forceDown = new Set([...(input.forceUnavailableModels || []), ...this.forcedDown]);
+    const list = all.filter((m) => !forceDown.has(m.modelId));
     const route = {
       taskClass,
       preferredModel: preferred || null,

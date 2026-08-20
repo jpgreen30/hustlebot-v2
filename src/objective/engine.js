@@ -18,6 +18,9 @@ import { suggestStrategy } from './strategy.js';
 import { OBJECTIVE_STATUS, compactObjective } from './schema.js';
 import { formatObjectiveReply, matchObjectiveControl } from './control.js';
 import { TASK_CLASS } from '../llm/router.js';
+import { decideDelegation } from './delegate.js';
+import { SwarmOrchestrator } from './swarm.js';
+import { SPECIALIST_STATUS } from './specialist.js';
 
 export class MacGyverEngine {
   constructor({
@@ -37,6 +40,7 @@ export class MacGyverEngine {
     this.fabric = fabric || null;
     this.memory = memory || new ObjectiveMemory();
     this.objectives = new Map();
+    this.swarm = new SwarmOrchestrator(this);
   }
 
   isAvailable() {
@@ -99,6 +103,15 @@ export class MacGyverEngine {
     });
     const strategy = suggestStrategy(objective, this.memory.list(20));
     objective.strategy = strategy;
+    const decision = decideDelegation(objective, { catalogue });
+    objective.delegation = {
+      delegate: decision.delegate,
+      reason: decision.reason,
+      estimatedWorkers: decision.estimatedWorkers,
+      estimatedBenefit: decision.estimatedBenefit,
+      pattern: decision.pattern,
+      slices: decision.slices
+    };
 
     let plan;
     try {
@@ -166,7 +179,11 @@ export class MacGyverEngine {
     this.persist(objective);
 
     if (input.planOnly) {
-      return { status: 'planned', objective, plan, validation, strategy };
+      return { status: 'planned', objective, plan, validation, strategy, delegation: objective.delegation };
+    }
+
+    if (decision.delegate && input.forceDirect !== true) {
+      return this.swarm.execute(objective, decision, catalogue, input);
     }
 
     const result = await this.executePlan(objective, plan, catalogue, input);
@@ -276,6 +293,15 @@ export class MacGyverEngine {
             reason: recovery.reason,
             bumpRetry: true
           });
+          const revised = (plan.nodes || []).find((n) => n.id === node.id);
+          if (revised) {
+            node.provider = revised.provider || node.provider;
+            node.capabilityId = revised.capabilityId;
+            node.reasonSelected = revised.reasonSelected;
+            node.retries = revised.retries;
+          }
+          const idx = (plan.nodes || []).findIndex((n) => n.id === node.id);
+          if (idx >= 0) plan.nodes[idx] = node;
           objective.plan = plan;
           objective.planRevisions = [
             ...(objective.planRevisions || []),
@@ -312,6 +338,12 @@ export class MacGyverEngine {
             completed.add(node.id);
             node.status = retryObs.status === OBSERVATION.PARTIAL ? 'partial' : 'completed';
             node.result = retryInvocation.result;
+          } else if (observation.status === OBSERVATION.PARTIAL) {
+            outputs[node.id] = invocation.result;
+            completed.add(node.id);
+            node.status = 'partial';
+            node.result = invocation.result;
+            node.error = retryObs.reason;
           } else if (recovery.action === 'accept-partial') {
             outputs[node.id] = retryInvocation.result || invocation.result;
             completed.add(node.id);
@@ -350,7 +382,10 @@ export class MacGyverEngine {
       providers: [...new Set(objective.executions.map((e) => e.provider).filter(Boolean))]
     };
     const failed = (plan.nodes || []).filter((n) => n.status === 'failed');
-    const discoverDone = completed.has('discover') || plan.pattern === 'authorized_test';
+    const discoverDone = completed.has('discover')
+      || completed.has('lookup')
+      || plan.pattern === 'authorized_test'
+      || plan.pattern === 'direct_capability';
     objective.status = (failed.length || !discoverDone) ? OBJECTIVE_STATUS.FAILED : OBJECTIVE_STATUS.COMPLETED;
     if (!discoverDone && !objective.error) objective.error = 'discovery did not complete';
     if (failed.length) objective.error = failed.map((n) => `${n.id}: ${n.error}`).join('; ');
@@ -585,6 +620,68 @@ export class MacGyverEngine {
     };
   }
 
+  inspectSwarm(matched = {}, record) {
+    const query = matched.query || '';
+    const action = matched.action;
+    if (!record) return { status: 'empty', report: 'No objective is loaded yet.' };
+    const specialists = record.specialists || [];
+    if (action === 'why-delegate') {
+      const d = record.delegation;
+      return {
+        status: 'ok',
+        report: d
+          ? `Delegate=${d.delegate}. ${d.reason} Estimated workers ${d.estimatedWorkers}. Benefit: ${d.estimatedBenefit}.`
+          : 'No delegation decision recorded.'
+      };
+    }
+    if (action === 'pause') {
+      record.status = OBJECTIVE_STATUS.PAUSED;
+      for (const spec of specialists) {
+        if (spec.status === SPECIALIST_STATUS.RUNNING || spec.status === SPECIALIST_STATUS.READY) spec.status = SPECIALIST_STATUS.WAITING;
+      }
+      this.persist(record);
+      return { status: 'ok', report: `Objective ${record.objectiveId} paused. Workers will stop at the next safe boundary.` };
+    }
+    if (action === 'stop-workers') {
+      for (const spec of specialists) {
+        if (spec.status !== SPECIALIST_STATUS.COMPLETED && spec.status !== SPECIALIST_STATUS.PARTIAL) {
+          spec.status = SPECIALIST_STATUS.CANCELLED;
+        }
+      }
+      record.status = OBJECTIVE_STATUS.CANCELLED;
+      this.persist(record);
+      return { status: 'ok', report: `Stopped ${specialists.length} workers on ${record.objectiveId}.` };
+    }
+    if (action === 'worker-models') {
+      const lines = specialists.map((s) => `${s.role}${s.slice ? `(${s.slice})` : ''}: ${s.modelSelected || 'n/a'}${s.modelFallback ? ` (fallback from ${s.modelPreferred})` : ''}`);
+      return { status: 'ok', report: lines.join('\n') || 'No specialists.' };
+    }
+    if (action === 'worker-tools') {
+      const lines = specialists.map((s) => `${s.role}: ${(s.executions || []).map((e) => `${e.capability}/${e.provider || 'n/a'}`).join(', ') || (s.allowedCapabilities || []).join(', ')}`);
+      return { status: 'ok', report: lines.join('\n') || 'No specialists.' };
+    }
+    if (action === 'worker-findings') {
+      const roleMatch = query.match(/the\s+(\w+)\s+(researcher|scout|worker|analyst)/i);
+      const needle = (roleMatch?.[1] || '').toLowerCase();
+      const spec = specialists.find((s) => (s.slice || s.role || '').toLowerCase().includes(needle))
+        || specialists.find((s) => s.role === 'researcher')
+        || specialists[0];
+      const names = (spec?.result?.findings || []).map((p) => p.organizationName || p.name).filter(Boolean);
+      return { status: 'ok', report: spec ? `${spec.role}${spec.slice ? `(${spec.slice})` : ''}: ${names.join(', ') || 'no findings yet'}` : 'No specialists.' };
+    }
+    const left = specialists.filter((s) => !['COMPLETED', 'PARTIAL', 'FAILED', 'CANCELLED'].includes(s.status)).length;
+    const lines = specialists.map((s) => `${s.role}${s.slice ? `(${s.slice})` : ''} · ${s.status} · model=${s.modelSelected || 'n/a'} · tools=${(s.allowedCapabilities || []).join(',')}`);
+    return {
+      status: 'ok',
+      report: [
+        `Objective ${record.objectiveId} · ${record.status}`,
+        record.delegation ? `Delegation ${record.delegation.delegate ? 'YES' : 'NO'}: ${record.delegation.reason}` : 'No delegation.',
+        `${left} workers still active of ${specialists.length}.`,
+        ...lines
+      ].join('\n')
+    };
+  }
+
   async control(input = {}) {
     const matched = typeof input === 'string' ? matchObjectiveControl(input) : input;
     const action = matched?.action || input.action || input.query;
@@ -592,18 +689,32 @@ export class MacGyverEngine {
     if (inspectActions.has(matched?.action) || inspectActions.has(String(action))) {
       return this.inspectTools(matched || { action, query: input.query || String(action) });
     }
+    const swarmActions = new Set(['workers', 'why-delegate', 'worker-models', 'worker-tools', 'worker-findings', 'stop-workers', 'pause']);
     const record = this.get(input.objectiveId || 'latest');
+    if (swarmActions.has(matched?.action)) {
+      return this.inspectSwarm(matched || { action, query: input.query || String(action) }, record);
+    }
     if (!record && !/run|start/i.test(String(action))) {
       return { status: 'empty', report: 'No objective is loaded yet.' };
     }
     if (/^stop|cancel/i.test(String(action)) || matched?.action === 'stop') {
       record.status = OBJECTIVE_STATUS.CANCELLED;
+      for (const spec of record.specialists || []) {
+        if (spec.status === SPECIALIST_STATUS.RUNNING || spec.status === SPECIALIST_STATUS.CREATED || spec.status === SPECIALIST_STATUS.READY || spec.status === SPECIALIST_STATUS.WAITING) {
+          spec.status = SPECIALIST_STATUS.CANCELLED;
+        }
+      }
       this.persist(record);
-      return { status: 'ok', report: `Objective ${record.objectiveId} stopped.` };
+      return { status: 'ok', report: `Objective ${record.objectiveId} stopped. Workers cancelled.` };
     }
     if (matched?.action === 'resume' || /^resume/i.test(String(action))) {
       if (record.status === OBJECTIVE_STATUS.AWAITING_APPROVAL && record.approvalId) {
         return this.resume(record.objectiveId);
+      }
+      if (record.status === OBJECTIVE_STATUS.PAUSED && record.delegation?.delegate) {
+        record.status = OBJECTIVE_STATUS.RUNNING;
+        const catalogue = this.catalogue({ availableOnly: true });
+        return this.swarm.execute(record, record.delegation, catalogue, { actor: 'telegram' });
       }
       return { status: 'ok', report: `Objective ${record.objectiveId} is ${record.status}.` };
     }

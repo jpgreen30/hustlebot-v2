@@ -10,14 +10,13 @@ export function recoveryAction(node, observation, { catalogue = [], retries = 0,
     const alreadyApollo = String(node.provider || '').toLowerCase() === 'apollo'
       || /apollo/i.test(String(node.reasonSelected || ''));
     if (!alreadyApollo) {
-      const apollo = catalogue.find((c) => c.capabilityId === 'contact.discover.batch' || c.capabilityId === 'prospect.enrich');
-      const apolloReady = apollo?.available || catalogue.some((c) =>
-        (c.providers || []).some((p) => p.provider === 'apollo' && p.available));
-      if (apolloReady) {
+      const cap = catalogue.find((c) => c.capabilityId === node.capabilityId);
+      const apollo = (cap?.providers || []).find((p) => /apollo/i.test(p.provider) && p.available);
+      if (apollo) {
         return {
           action: 'alternate-provider',
-          provider: 'apollo',
-          reason: 'public-web contact discovery returned zero named people; Apollo is configured'
+          provider: apollo.provider,
+          reason: 'public-web contact discovery returned zero named people; Apollo is available on the same capability'
         };
       }
     }

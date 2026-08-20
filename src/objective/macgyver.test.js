@@ -33,6 +33,11 @@ function macgyverRegistry({ failDiscoverOnce = false } = {}) {
       const query = String(input.query || input.objective || '');
       const roofing = /roof/i.test(query);
       const logistics = /logistics|freight|3pl|trucking/i.test(query);
+      const solar = /solar/i.test(query);
+      const hvac = /hvac/i.test(query);
+      const pregnancy = /pregnan/i.test(query);
+      const parenting = /parenting/i.test(query);
+      const baby = /baby.product|baby product/i.test(query);
       const prospects = roofing
         ? [
           { organizationName: 'LA Roof Pros', website: 'https://laroofpros.example', domain: 'laroofpros.example', description: 'Residential roofing in Los Angeles' },
@@ -46,6 +51,36 @@ function macgyverRegistry({ failDiscoverOnce = false } = {}) {
           { organizationName: 'Pacific 3PL', website: 'https://pacific3pl.example', domain: 'pacific3pl.example', description: 'Los Angeles warehousing and last-mile logistics' },
           { organizationName: 'Harbor Freight Lines', website: 'https://harborfreightlines.example', domain: 'harborfreightlines.example', description: 'Port of LA drayage and trucking' },
           { organizationName: 'Valley Distribution Co', website: 'https://valleydistribution.example', domain: 'valleydistribution.example', description: 'Southern California freight and fulfillment' }
+        ]
+        : solar
+        ? [
+          { organizationName: 'SunPath Solar', website: 'https://sunpathsolar.example', domain: 'sunpathsolar.example', description: 'Residential solar in Los Angeles' },
+          { organizationName: 'Valley PV Co', website: 'https://valleypv.example', domain: 'valleypv.example', description: 'Commercial solar installs' },
+          { organizationName: 'Pacific Panels', website: 'https://pacificpanels.example', domain: 'pacificpanels.example', description: 'Solar plus storage' }
+        ]
+        : hvac
+        ? [
+          { organizationName: 'CoolAir LA', website: 'https://coolairla.example', domain: 'coolairla.example', description: 'HVAC install and service' },
+          { organizationName: 'Valley Heat Pump', website: 'https://valleyheatpump.example', domain: 'valleyheatpump.example', description: 'Heat pumps Van Nuys' },
+          { organizationName: 'Harbor Climate', website: 'https://harborclimate.example', domain: 'harborclimate.example', description: 'Commercial HVAC' }
+        ]
+        : pregnancy
+        ? [
+          { organizationName: 'BumpApp', website: 'https://bumpapp.example', domain: 'bumpapp.example', description: 'Pregnancy week-by-week app' },
+          { organizationName: 'Ovia', website: 'https://ovia.example', domain: 'ovia.example', description: 'Fertility and pregnancy tracker' },
+          { organizationName: 'WhatToExpect', website: 'https://whattoexpect.example', domain: 'whattoexpect.example', description: 'Pregnancy content app' }
+        ]
+        : parenting
+        ? [
+          { organizationName: 'Peanut', website: 'https://peanut.example', domain: 'peanut.example', description: 'Parenting community' },
+          { organizationName: 'BabyCenter', website: 'https://babycenter.example', domain: 'babycenter.example', description: 'Parenting community and guides' },
+          { organizationName: 'Momscircle', website: 'https://momscircle.example', domain: 'momscircle.example', description: 'Local parenting groups' }
+        ]
+        : baby
+        ? [
+          { organizationName: 'Luca', website: 'https://luca.example', domain: 'luca.example', description: 'Baby product discovery' },
+          { organizationName: 'Babylist', website: 'https://babylist.example', domain: 'babylist.example', description: 'Registry and product discovery' },
+          { organizationName: 'NewbornCo', website: 'https://newbornco.example', domain: 'newbornco.example', description: 'Baby gear marketplace' }
         ]
         : [
           { organizationName: 'Atwave', website: 'https://atwave.com', domain: 'atwave.com', description: 'Affiliate network' },
@@ -90,6 +125,36 @@ function macgyverRegistry({ failDiscoverOnce = false } = {}) {
         contacts: i === 0 ? [{ fullName: 'Alex Founder', title: 'CEO', email: null, phone: null, emailStatus: 'UNKNOWN' }] : [],
         contact: i === 0 ? { fullName: 'Alex Founder', title: 'CEO' } : null
       }))
+    }),
+    isAvailable: () => true
+  });
+  r.register({
+    capabilityId: 'contact.discover.batch',
+    name: 'contacts-apollo',
+    provider: 'apollo',
+    expectedCost: 0.05,
+    handler: async (input) => ({
+      status: 'ok',
+      providers: ['apollo'],
+      prospects: (input.prospects || []).map((p) => ({
+        ...p,
+        contacts: [{ fullName: 'Pat Apollo', title: 'Owner', email: null, phone: null, emailStatus: 'UNKNOWN' }],
+        contact: { fullName: 'Pat Apollo', title: 'Owner' }
+      }))
+    }),
+    isAvailable: () => true
+  });
+  r.register({
+    capabilityId: 'mcp.hustlebot-local.public.time',
+    name: 'time',
+    provider: 'mcp:hustlebot-local',
+    expectedCost: 0,
+    handler: async () => ({
+      status: 'ok',
+      result: { now: '2026-08-20T18:00:00.000Z', timezone: 'UTC', fabricated: false },
+      now: '2026-08-20T18:00:00.000Z',
+      timezone: 'UTC',
+      fabricated: false
     }),
     isAvailable: () => true
   });

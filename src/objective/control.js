@@ -1,15 +1,22 @@
 const CONTROL_PATTERNS = [
   { action: 'status', re: /what are you working on|what(?:'s| is) (the )?(current )?objective|objective status/i },
   { action: 'plan', re: /show me the plan|what(?:'s| is) the (execution )?plan/i },
+  { action: 'why-delegate', re: /why did you delegate/i },
+  { action: 'workers', re: /what are your agents doing|who is working|show me the (research )?workers|how much work is left/i },
+  { action: 'worker-findings', re: /what did the .+ (researcher|scout|worker|analyst) find/i },
+  { action: 'worker-models', re: /which model is each agent using/i },
+  { action: 'worker-tools', re: /what tools did they use/i },
+  { action: 'stop-workers', re: /stop all workers/i },
+  { action: 'pause', re: /^pause(\b| the objective)/i },
   { action: 'why', re: /why did you (choose|use|pick)|why apollo|why (the )?spider|why firecrawl/i },
   { action: 'failed', re: /what failed|what went wrong|show (me )?failures/i },
   { action: 'retry', re: /try another way|try a different (provider|way)|replan/i },
   { action: 'skip', re: /skip that step|skip this step/i },
-  { action: 'stop', re: /^(stop|cancel|abort)(\b| the objective)/i },
+  { action: 'stop', re: /^(stop|cancel|abort)(\b| the objective)|stop this/i },
   { action: 'resume', re: /^resume(\b| the objective)/i },
   { action: 'blocking', re: /what(?:'s| is) blocking|waiting on approval/i },
   { action: 'cost', re: /how much has this cost|what(?:'s| is) the cost|what did this (objective )?cost/i },
-  { action: 'no-contact', re: /don'?t call anyone|do not call anyone|finish everything except outreach/i },
+  { action: 'no-contact', re: /don'?t call anyone|do not call anyone|finish everything except outreach|finish without outreach/i },
   { action: 'tools', re: /what tools do you have|which tools|what can you (do|use)|tool catalogue|list (your )?tools/i },
   { action: 'mcp', re: /what mcp servers|mcp servers?( are)? connected|connected mcp/i },
   { action: 'health', re: /is apollo healthy|apollo healthy|provider health|is firecrawl (healthy|up|available)/i },
@@ -35,7 +42,10 @@ export function matchObjectiveRun(text) {
   const looks = /(find|research|rank|qualify|discover).{0,80}(compan|exhibitor|prospect|roofer|decision maker|logistics)/i.test(value)
     || /(do not contact|don't contact)/i.test(value)
     || /(logistics|freight|3pl|trucking).{0,80}(compan|compar)/i.test(value)
-    || /comparison of their services/i.test(value);
+    || /comparison of their services/i.test(value)
+    || /current utc time|what time is it/i.test(value)
+    || /competitive landscape|strategic opportunit/i.test(value)
+    || /across .{8,}.+\band\b/i.test(value);
   if (!looks) return null;
   return { rawRequest: value };
 }
@@ -48,6 +58,9 @@ export function formatObjectiveReply(record) {
     record.interpretedGoal || record.rawRequest,
     plan ? `Plan ${plan.planId} v${plan.version} (${(plan.nodes || []).map((n) => n.capabilityId).join(' → ')})` : 'No plan yet.'
   ];
+  if (record.delegation) {
+    lines.push(`Delegation: ${record.delegation.delegate ? `YES (${record.delegation.estimatedWorkers} workers)` : 'NO'} — ${record.delegation.reason}`);
+  }
   if (record.result?.report) lines.push(record.result.report);
   if (record.error) lines.push(`Error: ${record.error}`);
   return lines.filter(Boolean).join('\n');

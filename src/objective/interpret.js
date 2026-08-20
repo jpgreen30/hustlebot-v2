@@ -1,12 +1,12 @@
 import { createObjective } from './schema.js';
 import { OUTBOUND_CAPABILITIES } from './catalogue.js';
 import { extractUrl } from './util.js';
+import { extractQuantities, extractSlices, isTrivialLookup } from './quantities.js';
 
 const ASW_URL = 'https://www.affiliatesummit.com/west/exhibitors-2026';
 
 export function interpretObjective(raw, extra = {}) {
   const text = String(raw || extra.rawRequest || extra.objective || '').trim();
-  const lower = text.toLowerCase();
   const constraints = [];
   const exclusions = [];
   const prohibited = new Set(extra.prohibitedCapabilities || []);
@@ -24,24 +24,26 @@ export function interpretObjective(raw, extra = {}) {
     prohibited.add('payment.checkout');
   }
 
-  const countMatch = text.match(/\b(\d+)\s+(companies|company|exhibitors|prospects|businesses|roofers?)\b/i)
-    || text.match(/\b(?:find|get|take)\s+(\d+)\b/i);
-  const wordCount = text.match(/\b(one|two|three|four|five|six|seven|eight|nine|ten)\s+(companies|company|exhibitors|prospects|businesses|roofers?)\b/i);
-  const WORD_NUM = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10 };
-  const topMatch = text.match(/\btop\s+(\d+)\b/i);
-  const findN = Number(extra.maxOrganizations || countMatch?.[1] || WORD_NUM[wordCount?.[1]?.toLowerCase()] || 10);
-  const topN = Number(extra.topN || topMatch?.[1] || Math.min(findN, 5));
+  const { findN, topN } = extractQuantities(text, extra);
+  const slices = extractSlices(text);
+  const trivial = isTrivialLookup(text);
 
-  successCriteria.push({ type: 'minOrganizations', value: Math.min(findN, 3) });
-  successCriteria.push({ type: 'rankedTop', value: topN });
+  if (!trivial) {
+    successCriteria.push({ type: 'minOrganizations', value: Math.min(findN, 3) });
+    successCriteria.push({ type: 'rankedTop', value: topN });
+  } else {
+    successCriteria.push({ type: 'lookup', value: 'utc-time' });
+  }
   if (doNotContact) successCriteria.push({ type: 'noOutbound', value: true });
-  if (/\bcompar/i.test(text)) successCriteria.push({ type: 'comparison', value: true });
+  if (/\bcompar/i.test(text) || /opportunit/i.test(text)) successCriteria.push({ type: 'comparison', value: true });
 
   const sourceUrl = extra.sourceUrl || extra.url || extractUrl(text)
     || (/affiliate summit/i.test(text) ? ASW_URL : null);
 
   let pattern = 'research_rank_search';
-  if (/(authorized|self-test|test email|test call)/i.test(text) && !doNotContact) {
+  if (trivial) {
+    pattern = 'direct_capability';
+  } else if (/(authorized|self-test|test email|test call)/i.test(text) && !doNotContact) {
     pattern = 'authorized_test';
   } else if (sourceUrl || /exhibitor|affiliate summit|directory/i.test(text)) {
     pattern = 'research_rank_directory';
@@ -52,16 +54,18 @@ export function interpretObjective(raw, extra = {}) {
     || (/qentrax|lead buyer|affiliate/i.test(text) ? 'qentrax-buyer' : 'qentrax-buyer');
 
   const locationMatch = text.match(/\b(los angeles|la-area|southern california|van nuys|california)\b/i);
-  const industryMatch = text.match(/\b(roofing|roofer|solar|hvac|insurance|home service|logistics|freight|shipping|3pl|trucking|warehous\w*)\b/i);
+  const industryMatch = slices[0] || (text.match(/\b(roofing|roofer|solar|hvac|insurance|home service|logistics|freight|shipping|3pl|trucking|warehous\w*)\b/i)?.[0] || null);
 
   const query = extra.query
     || (industryMatch
-      ? `${locationMatch?.[0] || ''} ${industryMatch[0]} companies`.replace(/\s+/g, ' ').trim()
+      ? `${locationMatch?.[0] || ''} ${industryMatch} companies`.replace(/\s+/g, ' ').trim()
       : null);
 
-  const interpretedGoal = doNotContact
-    ? `Discover, research, qualify, and rank prospects. Do not contact anyone.`
-    : text;
+  const interpretedGoal = trivial
+    ? 'Lookup a live capability result. Do not spawn specialists.'
+    : (doNotContact
+      ? `Discover, research, qualify, and rank prospects. Do not contact anyone.`
+      : text);
 
   const objective = createObjective({
     ...extra,
@@ -81,7 +85,8 @@ export function interpretObjective(raw, extra = {}) {
       profileId,
       pattern,
       location: locationMatch?.[0] || extra.location || null,
-      industry: industryMatch?.[0] || extra.industry || null,
+      industry: industryMatch || extra.industry || null,
+      slices,
       megaCapabilityForbidden: extra.megaCapabilityForbidden !== false,
       testEmail: extra.context?.testEmail || extra.testEmail || process.env.OUTREACH_TEST_EMAIL || process.env.EMAIL_TEST_DESTINATION || null
     }
@@ -89,3 +94,5 @@ export function interpretObjective(raw, extra = {}) {
 
   return objective;
 }
+
+export { extractQuantities, extractSlices, isTrivialLookup };

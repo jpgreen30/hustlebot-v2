@@ -50,9 +50,22 @@ export function planObjective(objective, catalogue = []) {
   const nodes = [];
   const reasons = [];
 
-  const forbidMega = ctx.megaCapabilityForbidden !== false && pattern !== 'authorized_test';
+  const forbidMega = ctx.megaCapabilityForbidden !== false && pattern !== 'authorized_test' && pattern !== 'direct_capability';
 
-  if (pattern === 'authorized_test') {
+  if (pattern === 'direct_capability') {
+    const timeId = pickCapability(catalogue, [
+      ...catalogue.filter((c) => /public\.time$/.test(c.capabilityId)).map((c) => c.capabilityId),
+      ...catalogue.filter((c) => /public\.ping$/.test(c.capabilityId)).map((c) => c.capabilityId),
+      'fabric.inspect'
+    ]);
+    if (!timeId) throw new Error('Cannot plan lookup: no time/ping capability is available');
+    nodes.push(node('lookup', timeId, {
+      description: 'Direct catalogue lookup — no swarm',
+      inputs: { label: 'macgyver-direct' },
+      reasonSelected: `${timeId} satisfies a trivial lookup without specialists`
+    }));
+    reasons.push('Direct capability path: zero specialists.');
+  } else if (pattern === 'authorized_test') {
     const emailCap = pickCapability(catalogue, ['outreach.email']);
     if (!emailCap || prohibited.has('outreach.email')) {
       throw new Error('Authorized test requires outreach.email and must not be prohibited');

@@ -323,7 +323,7 @@ class IntentDetector {
   hintObjectiveControlIntent(userMessage) {
     const text = String(userMessage || '').trim();
     if (!text) return null;
-    if (!/(what are you working on|show me the plan|why did you|what failed|try another way|skip that step|^stop\b|^resume\b|what(?:'s| is) blocking|how much has this cost|what did this (objective )?cost|don'?t call anyone|finish everything except outreach)/i.test(text)) {
+    if (!/(what are you working on|show me the plan|why did you|what failed|try another way|skip that step|^stop\b|^resume\b|^pause\b|what(?:'s| is) blocking|how much has this cost|what did this (objective )?cost|don'?t call anyone|finish everything except outreach|finish without outreach|what are your agents doing|who is working|show me the (research )?workers|why did you delegate|which model is each agent using|what tools did they use|stop all workers|how much work is left)/i.test(text)) {
       return null;
     }
     return {
@@ -343,7 +343,10 @@ class IntentDetector {
     const looks = /(find|research|rank|qualify|discover).{0,120}(compan|exhibitor|prospect|roofer|decision maker|logistics)/i.test(text)
       || (/(do not contact|don't contact)/i.test(text) && /(find|research|rank)/i.test(text))
       || /(logistics|freight|3pl|trucking).{0,80}(compan|compar)/i.test(text)
-      || /comparison of their services/i.test(text);
+      || /comparison of their services/i.test(text)
+      || /current utc time|what time is it/i.test(text)
+      || /competitive landscape|strategic opportunit/i.test(text)
+      || /across .{8,}.+\band\b/i.test(text);
     if (!looks) return null;
     const urlMatch = text.match(/https?:\/\/[^\s)]+/i);
     const parameters = { objective: text, rawRequest: text };

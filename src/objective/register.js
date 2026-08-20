@@ -86,12 +86,43 @@ export function registerObjectiveCapabilities(registry, services = {}) {
         const prospects = await contactsBatch(contactDiscovery, list, {
           objective: input.objective,
           qualificationProfile: input.qualificationProfile,
-          skipApollo: context?.skipApollo === true,
+          skipApollo: context?.provider === 'apollo' ? false : context?.skipApollo !== false,
           enrichPeople: input.enrichPeople || context?.enrichPeople || 0
         });
-        return { status: 'ok', prospects, providers: ['public-web', 'apollo'], fabricated: false };
+        return { status: 'ok', prospects, providers: ['public-web'], fabricated: false };
       },
       isAvailable: ready(contactDiscovery, 'discover')
+    },
+    {
+      capabilityId: 'contact.discover.batch',
+      name: 'Discover decision makers via Apollo',
+      description: 'Paid people search through the contact.discover capability. Used only after public-web is insufficient.',
+      provider: 'apollo',
+      permissions: ['network.read'],
+      tags: ['contacts', 'enrich'],
+      sideEffect: 'READ_ONLY',
+      inputs: {
+        type: 'object',
+        properties: {
+          prospects: { type: 'array' },
+          objective: { type: 'string' },
+          qualificationProfile: { type: 'string' }
+        }
+      },
+      expectedCost: 0.05,
+      expectedLatencyMs: 20000,
+      reliability: 0.72,
+      handler: async (input, context) => {
+        const list = input.prospects || [];
+        const prospects = await contactsBatch(contactDiscovery, list, {
+          objective: input.objective,
+          qualificationProfile: input.qualificationProfile,
+          skipApollo: false,
+          enrichPeople: input.enrichPeople || context?.enrichPeople || 1
+        });
+        return { status: 'ok', prospects, providers: ['apollo'], fabricated: false };
+      },
+      isAvailable: () => Boolean(contactDiscovery?.apollo?.isAvailable?.())
     },
     {
       capabilityId: 'objective.report',

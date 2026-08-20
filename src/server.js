@@ -2068,6 +2068,40 @@ class HustleBotServer {
       });
     });
 
+    this.app.get('/api/specialists', this.actionAuth, (req, res) => {
+      if (!this.macgyverEngine) return res.status(503).json({ error: 'MacGyver engine not initialized' });
+      const record = this.macgyverEngine.get(req.query.objectiveId || 'latest');
+      res.json({
+        objectiveId: record?.objectiveId || null,
+        delegation: record?.delegation || null,
+        specialists: record?.specialists || [],
+        arbitration: record?.arbitration || null,
+        critic: record?.critic || null
+      });
+    });
+
+    this.app.get('/day7', (req, res) => {
+      const objectives = this.macgyverEngine?.list(8) || [];
+      const latest = this.macgyverEngine?.latest?.() || null;
+      const email = this.outreachEmail?.isAvailable?.() ? 'configured' : 'UNAVAILABLE';
+      res.type('html').send(`<!doctype html>
+<html><head><meta charset="utf-8"><title>HustleBot Day-7</title>
+<style>body{font-family:ui-sans-serif,system-ui;background:#0f1419;color:#e7ecf1;margin:0;padding:32px;max-width:1040px}h1{margin:0 0 8px}code,pre{background:#1b232c;padding:12px;border-radius:8px;display:block;overflow:auto} .ok{color:#7dce82}.bad{color:#ff8b8b}</style>
+</head><body>
+<h1>HustleBot Day-7 Specialists</h1>
+<p>MacGyver remains the supervisor. Specialists are bounded, least-privilege, and terminate with the objective.</p>
+<p>Email: <span class="${email === 'configured' ? 'ok' : 'bad'}">${email}</span></p>
+<h2>Latest delegation</h2>
+<pre>${JSON.stringify({
+        objectiveId: latest?.objectiveId,
+        delegation: latest?.delegation,
+        specialists: (latest?.specialists || []).map((s) => ({ id: s.specialistId, role: s.role, slice: s.slice, status: s.status, model: s.modelSelected }))
+      }, null, 2)}</pre>
+<h2>Recent objectives</h2>
+<pre>${JSON.stringify(objectives, null, 2)}</pre>
+</body></html>`);
+    });
+
     this.app.get('/day6', (req, res) => {
       const stats = this.toolFabric?.stats?.() || {};
       const servers = this.toolFabric?.mcpRegistry?.list?.() || [];
