@@ -180,8 +180,16 @@ class CapabilityRegistry {
     const vertical = options.vertical || '*';
     const maxCost = options.maxCost ?? Infinity;
 
+    const down = new Set([
+      ...(options.forceUnavailable || []),
+      ...Object.entries(options.healthOverlay || {})
+        .filter(([, health]) => health === 'UNAVAILABLE' || health === 'DISABLED')
+        .map(([provider]) => provider)
+    ]);
+
     const eligible = entries.filter((entry) => {
       if (options.provider && entry.provider !== options.provider) return false;
+      if (down.has(entry.provider)) return false;
       if (entry.expectedCost > maxCost) return false;
 
       const supports =
@@ -225,7 +233,9 @@ class CapabilityRegistry {
     const candidates = this.resolve(capabilityId, {
       vertical: context.vertical,
       provider: context.provider,
-      maxCost: context.maxCost
+      maxCost: context.maxCost,
+      forceUnavailable: context.forceUnavailable,
+      healthOverlay: context.healthOverlay
     });
 
     if (candidates.length === 0) {

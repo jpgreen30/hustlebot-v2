@@ -1,4 +1,5 @@
 import { isOutboundCapability } from './catalogue.js';
+import { MEGA } from './planner.js';
 
 export function validatePlan(plan, { catalogue = [], objective = {}, registry = null } = {}) {
   const errors = [];
@@ -27,8 +28,8 @@ export function validatePlan(plan, { catalogue = [], objective = {}, registry = 
     if (doNotContact && isOutboundCapability(node.capabilityId)) {
       errors.push(`node ${node.id} introduces outbound ${node.capabilityId} despite do-not-contact`);
     }
-    if (objective.context?.megaCapabilityForbidden !== false && node.capabilityId === 'campaign.prepare') {
-      errors.push('plan routed to campaign.prepare which is forbidden for MacGyver research objectives');
+    if (objective.context?.megaCapabilityForbidden !== false && MEGA.has(node.capabilityId) && plan.pattern !== 'authorized_test') {
+      errors.push(`plan routed to ${node.capabilityId} which is forbidden for MacGyver research objectives`);
     }
     for (const dep of node.dependsOn || []) {
       if (!nodes.some((n) => n.id === dep)) errors.push(`node ${node.id} depends on missing ${dep}`);

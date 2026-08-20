@@ -54,9 +54,11 @@ Rules:
 - Respond ONLY with the JSON object, no markdown or explanation`;
 
 class IntentDetector {
-  constructor({ llm, registry } = {}) {
+  constructor({ llm, registry, fabric, router } = {}) {
     this.llm = llm;
     this.registry = registry;
+    this.fabric = fabric || null;
+    this.router = router || null;
   }
 
   /**
@@ -115,7 +117,8 @@ class IntentDetector {
         };
       }
 
-      const hinted = this.hintObjectiveControlIntent(userMessage)
+      const hinted = this.hintToolInspectIntent(userMessage)
+        || this.hintObjectiveControlIntent(userMessage)
         || this.hintObjectiveRunIntent(userMessage)
         || this.hintCampaignControlIntent(userMessage)
         || this.hintCampaignIntent(userMessage)
@@ -300,10 +303,27 @@ class IntentDetector {
     };
   }
 
+  hintToolInspectIntent(userMessage) {
+    const text = String(userMessage || '').trim();
+    if (!text) return null;
+    if (!/(what tools do you have|what mcp servers|is apollo healthy|what can you use for web research|which model planned|refresh your tools|what did this (objective )?cost)/i.test(text)) {
+      return null;
+    }
+    const capabilityId = /refresh your tools/i.test(text) ? 'mcp.refresh' : 'fabric.inspect';
+    return {
+      intent: 'Inspect tools, models, or MCP health',
+      capabilityId,
+      parameters: { query: text, q: text },
+      confidence: 0.95,
+      reasoning: 'deterministic tool-fabric introspection hint',
+      fallback_response: ''
+    };
+  }
+
   hintObjectiveControlIntent(userMessage) {
     const text = String(userMessage || '').trim();
     if (!text) return null;
-    if (!/(what are you working on|show me the plan|why did you|what failed|try another way|skip that step|^stop\b|^resume\b|what(?:'s| is) blocking|how much has this cost|don'?t call anyone|finish everything except outreach)/i.test(text)) {
+    if (!/(what are you working on|show me the plan|why did you|what failed|try another way|skip that step|^stop\b|^resume\b|what(?:'s| is) blocking|how much has this cost|what did this (objective )?cost|don'?t call anyone|finish everything except outreach)/i.test(text)) {
       return null;
     }
     return {
@@ -320,8 +340,10 @@ class IntentDetector {
     const text = String(userMessage || '').trim();
     if (!text) return null;
     if (/prepare (an |the )?(outreach )?campaign/i.test(text)) return null;
-    const looks = /(find|research|rank|qualify|discover).{0,120}(compan|exhibitor|prospect|roofer|decision maker)/i.test(text)
-      || (/(do not contact|don't contact)/i.test(text) && /(find|research|rank)/i.test(text));
+    const looks = /(find|research|rank|qualify|discover).{0,120}(compan|exhibitor|prospect|roofer|decision maker|logistics)/i.test(text)
+      || (/(do not contact|don't contact)/i.test(text) && /(find|research|rank)/i.test(text))
+      || /(logistics|freight|3pl|trucking).{0,80}(compan|compar)/i.test(text)
+      || /comparison of their services/i.test(text);
     if (!looks) return null;
     const urlMatch = text.match(/https?:\/\/[^\s)]+/i);
     const parameters = { objective: text, rawRequest: text };

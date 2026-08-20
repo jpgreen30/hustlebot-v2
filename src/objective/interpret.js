@@ -26,13 +26,16 @@ export function interpretObjective(raw, extra = {}) {
 
   const countMatch = text.match(/\b(\d+)\s+(companies|company|exhibitors|prospects|businesses|roofers?)\b/i)
     || text.match(/\b(?:find|get|take)\s+(\d+)\b/i);
+  const wordCount = text.match(/\b(one|two|three|four|five|six|seven|eight|nine|ten)\s+(companies|company|exhibitors|prospects|businesses|roofers?)\b/i);
+  const WORD_NUM = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10 };
   const topMatch = text.match(/\btop\s+(\d+)\b/i);
-  const findN = Number(extra.maxOrganizations || countMatch?.[1] || 10);
+  const findN = Number(extra.maxOrganizations || countMatch?.[1] || WORD_NUM[wordCount?.[1]?.toLowerCase()] || 10);
   const topN = Number(extra.topN || topMatch?.[1] || Math.min(findN, 5));
 
   successCriteria.push({ type: 'minOrganizations', value: Math.min(findN, 3) });
   successCriteria.push({ type: 'rankedTop', value: topN });
   if (doNotContact) successCriteria.push({ type: 'noOutbound', value: true });
+  if (/\bcompar/i.test(text)) successCriteria.push({ type: 'comparison', value: true });
 
   const sourceUrl = extra.sourceUrl || extra.url || extractUrl(text)
     || (/affiliate summit/i.test(text) ? ASW_URL : null);
@@ -49,7 +52,7 @@ export function interpretObjective(raw, extra = {}) {
     || (/qentrax|lead buyer|affiliate/i.test(text) ? 'qentrax-buyer' : 'qentrax-buyer');
 
   const locationMatch = text.match(/\b(los angeles|la-area|southern california|van nuys|california)\b/i);
-  const industryMatch = text.match(/\b(roofing|roofer|solar|hvac|insurance|home service)\b/i);
+  const industryMatch = text.match(/\b(roofing|roofer|solar|hvac|insurance|home service|logistics|freight|shipping|3pl|trucking|warehous\w*)\b/i);
 
   const query = extra.query
     || (industryMatch

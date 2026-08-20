@@ -182,7 +182,9 @@ class OpenRouterClient {
       } = options;
 
       // Select model
-      const model = this.selectModel(taskType, {
+      const model = options.model
+        ? { id: options.model, cost_input: 0, cost_output: 0 }
+        : this.selectModel(taskType, {
         budgetTight,
         isMultimodal,
         needsSpeed,

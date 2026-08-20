@@ -1,7 +1,7 @@
 import { newPlanId } from './schema.js';
 import { catalogueHas, isOutboundCapability, pickCapability } from './catalogue.js';
 
-const MEGA = new Set(['campaign.prepare', 'acquisition.run', 'objective.run']);
+export const MEGA = new Set(['campaign.prepare', 'acquisition.run', 'objective.run', 'n8n:campaign-prepare', 'n8n:campaign-orchestrate']);
 
 function node(id, capabilityId, rest = {}) {
   return {
@@ -18,6 +18,21 @@ function node(id, capabilityId, rest = {}) {
     reasonSelected: rest.reasonSelected,
     status: 'pending'
   };
+}
+
+function reasonFor(catalogue, capabilityId, purpose) {
+  const cap = catalogue.find((c) => c.capabilityId === capabilityId) || {};
+  const provider = cap.preferredProvider || 'unknown';
+  const health = cap.health || 'UNVERIFIED';
+  const cost = cap.costClass || cap.costCategory || 'UNKNOWN';
+  let text = `${purpose}: ${capabilityId} via ${provider} is ${health} and cost ${cost}`;
+  if (provider === 'public-web' || cost === 'FREE' || cost === 'NEGLIGIBLE' || cost === 'LOW') {
+    text += '. Cheaper public-web preferred over paid enrichment';
+  }
+  if (/apollo/i.test(String(provider))) {
+    text += '. Paid enrichment selected because cheaper public-web was insufficient or unavailable';
+  }
+  return text;
 }
 
 function requireCap(catalogue, ids, label) {
@@ -75,9 +90,7 @@ export function planObjective(objective, catalogue = []) {
         location: ctx.location || null,
         industry: ctx.industry || null
       },
-      reasonSelected: discoverId === 'org.discover'
-        ? 'org.discover inspects the live catalogue and routes to browser extract or web search'
-        : `Catalogue offered ${discoverId} for discovery`
+      reasonSelected: reasonFor(catalogue, discoverId, 'discovery')
     }));
 
     const researchId = requireCap(catalogue, ['company.research.batch', 'company.research'], 'company research');
@@ -85,7 +98,7 @@ export function planObjective(objective, catalogue = []) {
       description: 'Research each discovered company from public sources',
       dependsOn: ['discover'],
       inputs: { prospects: { $ref: 'discover.prospects' }, organizations: { $ref: 'discover.prospects' } },
-      reasonSelected: 'company.research is available and the objective requires public-web intelligence'
+      reasonSelected: reasonFor(catalogue, researchId, 'company research')
     }));
 
     const contactId = requireCap(catalogue, ['contact.discover.batch', 'contact.discover'], 'contact discovery');
@@ -97,7 +110,7 @@ export function planObjective(objective, catalogue = []) {
         objective: objective.rawRequest,
         qualificationProfile: ctx.profileId || 'qentrax-buyer'
       },
-      reasonSelected: 'contact.discover is registered; Apollo is used only through that capability'
+      reasonSelected: reasonFor(catalogue, contactId, 'contact discovery')
     }));
 
     if (catalogueHas(catalogue, 'prospect.qualify')) {
@@ -109,7 +122,7 @@ export function planObjective(objective, catalogue = []) {
           objective: objective.rawRequest,
           qualificationProfile: ctx.profileId || 'qentrax-buyer'
         },
-        reasonSelected: 'prospect.qualify is available and success criteria include ranking'
+        reasonSelected: reasonFor(catalogue, 'prospect.qualify', 'qualification')
       }));
     }
 
@@ -120,7 +133,7 @@ export function planObjective(objective, catalogue = []) {
         description: 'Score and rank prospects',
         dependsOn: scoreDepends,
         inputs: { prospects: { $ref: scoreRef }, topN: ctx.topN || 5 },
-        reasonSelected: 'prospect.score produces explainable ranking without contacting anyone'
+        reasonSelected: reasonFor(catalogue, 'prospect.score', 'ranking')
       }));
     }
 
@@ -135,7 +148,20 @@ export function planObjective(objective, catalogue = []) {
           topN: ctx.topN || 5,
           objective: objective.rawRequest
         },
-        reasonSelected: 'objective.report finishes the DAG with evidence, not outreach'
+        reasonSelected: reasonFor(catalogue, 'objective.report', 'report')
+      }));
+    }
+
+    const wantsCompare = (objective.successCriteria || []).some((s) => s.type === 'comparison');
+    const compareCap = wantsCompare
+      ? catalogue.find((c) => c.available !== false && /public\.compare/.test(c.capabilityId))
+      : null;
+    if (compareCap && catalogueHas(catalogue, 'objective.report')) {
+      nodes.push(node('compare', compareCap.capabilityId, {
+        description: 'Compare researched organizations using a discovered read-only tool',
+        dependsOn: ['report'],
+        inputs: { organizations: { $ref: 'report.top' } },
+        reasonSelected: reasonFor(catalogue, compareCap.capabilityId, 'comparison')
       }));
     }
   }

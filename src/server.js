@@ -95,6 +95,8 @@ import { MacGyverEngine } from './objective/engine.js';
 import { OrgDiscovery } from './objective/discover.js';
 import { registerObjectiveCapabilities } from './objective/register.js';
 import { matchObjectiveControl, matchObjectiveRun } from './objective/control.js';
+import { ToolFabric, registerFabricCapabilities } from './fabric/index.js';
+import { LlmRouter } from './llm/router.js';
 
 class HustleBotServer {
   constructor() {
@@ -130,6 +132,8 @@ class HustleBotServer {
     this.planner = null;
     this.jobQueue = null;
     this.approvalGate = null;
+    this.toolFabric = null;
+    this.llmRouter = null;
     this.commandCenter = null;
     this.costOptimizer = null;
     this.memorySystem = null;
@@ -740,7 +744,24 @@ class HustleBotServer {
             macgyverEngine: this.macgyverEngine
           });
         }
-        logger.info('✅ Day-5 MacGyver objective engine ready');
+        try {
+          this.llmRouter = new LlmRouter({ client: this.llm });
+          this.toolFabric = new ToolFabric({
+            registry: this.capabilityRegistry,
+            n8n: this.n8nIntegration
+          });
+          await this.toolFabric.boot();
+          registerFabricCapabilities(this.capabilityRegistry, this.toolFabric);
+          this.macgyverEngine.router = this.llmRouter;
+          this.macgyverEngine.fabric = this.toolFabric;
+          logger.info(
+            `✅ Day-5 MacGyver + Day-6 fabric/router ready (visible=${this.toolFabric.stats().visible}, quarantined=${this.toolFabric.stats().quarantined})`
+          );
+        } catch (error) {
+          logger.warn('⚠️  Day-6 fabric/router failed, MacGyver continues:', error.message);
+          this.initializationErrors.push({ module: 'tool-fabric', error: error.message });
+          logger.info('✅ Day-5 MacGyver objective engine ready');
+        }
       } catch (error) {
         logger.warn('⚠️  Intelligence initialization failed, continuing:', error.message);
         this.initializationErrors.push({ module: 'intelligence', error: error.message });
@@ -780,7 +801,9 @@ class HustleBotServer {
         logger.info('🔗 Initializing action routing (Intent Detector + Action Bridge)...');
         this.intentDetector = new IntentDetector({
           llm: this.llm,
-          registry: this.capabilityRegistry
+          registry: this.capabilityRegistry,
+          fabric: this.toolFabric,
+          router: this.llmRouter
         });
         this.actionBridge = new ActionBridge({
           capabilityRegistry: this.capabilityRegistry
@@ -1993,6 +2016,82 @@ class HustleBotServer {
         logger.error(`Objective control error: ${error.message}`);
         res.status(500).json({ error: error.message });
       }
+    });
+
+    this.app.get('/api/tools', this.actionAuth, (req, res) => {
+      if (!this.toolFabric) return res.status(503).json({ error: 'Tool fabric not initialized' });
+      const inspect = this.toolFabric.inspect(req.query.q || 'tools');
+      res.json({
+        stats: this.toolFabric.stats(),
+        inspect,
+        catalogue: this.macgyverEngine?.catalogue({ availableOnly: req.query.availableOnly !== 'false' }) || []
+      });
+    });
+
+    this.app.get('/api/mcp', this.actionAuth, (req, res) => {
+      if (!this.toolFabric) return res.status(503).json({ error: 'Tool fabric not initialized' });
+      res.json({
+        servers: this.toolFabric.mcpRegistry.list(),
+        stats: this.toolFabric.stats(),
+        tools: this.toolFabric.snapshot()
+      });
+    });
+
+    this.app.post('/api/mcp/refresh', this.actionAuth, this.actionRateLimit, async (req, res) => {
+      try {
+        if (!this.toolFabric) return res.status(503).json({ error: 'Tool fabric not initialized' });
+        const result = await this.toolFabric.refresh(req.body?.serverId);
+        res.json(result);
+      } catch (error) {
+        logger.error(`MCP refresh error: ${error.message}`);
+        res.status(500).json({ error: error.message });
+      }
+    });
+
+    this.app.post('/api/tools/health', this.actionAuth, this.actionRateLimit, (req, res) => {
+      if (!this.toolFabric) return res.status(503).json({ error: 'Tool fabric not initialized' });
+      const provider = req.body?.provider;
+      const state = req.body?.state;
+      if (!provider) return res.status(400).json({ error: 'provider required' });
+      if (state === 'UNAVAILABLE') this.toolFabric.forceProviderDown(provider);
+      else this.toolFabric.restoreProvider(provider);
+      res.json({ overlay: this.toolFabric.healthOverlay(), provider, state: state || 'HEALTHY' });
+    });
+
+    this.app.get('/api/llm', this.actionAuth, (req, res) => {
+      if (!this.llmRouter) return res.status(503).json({ error: 'LLM router not initialized' });
+      const taskClass = req.query.taskClass || 'PLANNING';
+      res.json({
+        models: this.llmRouter.list(),
+        lastRoute: this.llmRouter.lastRoute,
+        sample: this.llmRouter.select({ taskClass })
+      });
+    });
+
+    this.app.get('/day6', (req, res) => {
+      const stats = this.toolFabric?.stats?.() || {};
+      const servers = this.toolFabric?.mcpRegistry?.list?.() || [];
+      const models = this.llmRouter?.list?.() || [];
+      const objectives = this.macgyverEngine?.list(8) || [];
+      const email = this.outreachEmail?.isAvailable?.() ? 'configured' : 'UNAVAILABLE';
+      res.type('html').send(`<!doctype html>
+<html><head><meta charset="utf-8"><title>HustleBot Day-6</title>
+<style>body{font-family:ui-sans-serif,system-ui;background:#0f1419;color:#e7ecf1;margin:0;padding:32px;max-width:1040px}h1{margin:0 0 8px}code,pre{background:#1b232c;padding:12px;border-radius:8px;display:block;overflow:auto} .ok{color:#7dce82}.bad{color:#ff8b8b}</style>
+</head><body>
+<h1>HustleBot Day-6 Tool Fabric + LLM Router</h1>
+<p>Dynamic MCP/n8n tools feed the existing catalogue. The planner still composes DAGs — it does not hard-code new workflows.</p>
+<p>Email: <span class="${email === 'configured' ? 'ok' : 'bad'}">${email}</span>
+ · Visible tools: ${stats.visible ?? 0}
+ · Quarantined: ${stats.quarantined ?? 0}
+ · MCP servers: ${servers.length}
+ · Models: ${models.length}</p>
+<h2>MCP servers</h2>
+<pre>${JSON.stringify(servers, null, 2)}</pre>
+<h2>Models</h2>
+<pre>${JSON.stringify(models.map((m) => ({ id: m.modelId, tasks: m.taskClasses, cost: m.relativeCost })), null, 2)}</pre>
+<h2>Recent objectives</h2>
+<pre>${JSON.stringify(objectives, null, 2)}</pre>
+</body></html>`);
     });
 
     this.app.get('/day5', (req, res) => {

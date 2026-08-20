@@ -3,6 +3,8 @@
  * Extra metadata is merged onto the live registry; tools are never assumed.
  */
 
+import { TOOL_HEALTH } from '../fabric/descriptor.js';
+
 export const SIDE_EFFECT = {
   READ_ONLY: 'READ_ONLY',
   LOW_RISK_WRITE: 'LOW_RISK_WRITE',
@@ -59,6 +61,8 @@ const TAGS_BY_ID = {
   'outreach.execute': ['outbound']
 };
 
+const COST_RANK = { FREE: 0, NEGLIGIBLE: 1, LOW: 2, MEDIUM: 3, HIGH: 4, UNKNOWN: 3 };
+
 function costCategory(expectedCost = 0) {
   if (expectedCost <= 0) return 'free';
   if (expectedCost < 0.01) return 'low';
@@ -82,44 +86,57 @@ export function classifyCapability(capabilityId, entry = {}) {
 }
 
 export function isOutboundCapability(capabilityId) {
-  return OUTBOUND_CAPABILITIES.includes(capabilityId);
+  return OUTBOUND_CAPABILITIES.includes(capabilityId)
+    || /outbound\.|email\.send|blast_email|voice\.call/.test(String(capabilityId || ''));
 }
 
-export function inspectCatalogue(registry, { availableOnly = true, vertical } = {}) {
+export function inspectCatalogue(registry, { availableOnly = true, vertical, healthOverlay = {} } = {}) {
   if (!registry) return [];
-  const listed = registry.list({ availableOnly, vertical });
+  const listed = registry.list({ availableOnly: false, vertical });
   return listed.map((cap) => {
     const described = registry.describe(cap.capabilityId);
-    const preferred = (described?.providers || []).find((p) => p.available) || described?.providers?.[0] || {};
-    const sideEffect = classifyCapability(cap.capabilityId, preferred);
-    return {
-      capabilityId: cap.capabilityId,
-      description: preferred.description || preferred.name || cap.capabilityId,
-      inputSchema: preferred.inputs || null,
-      outputSchema: preferred.outputs || null,
-      providers: described?.providers?.map((p) => ({
+    const rawProviders = described?.providers || [];
+    const providers = rawProviders.map((p) => {
+      const overlay = healthOverlay[p.provider] || healthOverlay[cap.capabilityId];
+      const available = overlay === TOOL_HEALTH.UNAVAILABLE || overlay === 'UNAVAILABLE' ? false : p.available;
+      return {
         provider: p.provider,
-        available: p.available,
+        available,
+        health: overlay || (p.available ? TOOL_HEALTH.HEALTHY : TOOL_HEALTH.UNAVAILABLE),
         expectedCost: p.expectedCost,
         expectedLatencyMs: p.expectedLatencyMs,
         requiresApproval: p.requiresApproval,
         fallbackProvider: p.fallbackProvider || null,
         failureModes: p.failureModes || []
-      })) || [],
-      preferredProvider: cap.preferredProvider,
-      available: cap.available,
+      };
+    });
+    const availableProviders = providers.filter((p) => p.available).sort((a, b) => (a.expectedCost || 0) - (b.expectedCost || 0));
+    const preferred = availableProviders[0] || providers[0] || {};
+    const preferredMeta = rawProviders.find((p) => p.provider === preferred.provider) || rawProviders[0] || {};
+    const sideEffect = classifyCapability(cap.capabilityId, preferredMeta);
+    const available = providers.some((p) => p.available);
+    return {
+      capabilityId: cap.capabilityId,
+      description: preferredMeta.description || preferredMeta.name || cap.capabilityId,
+      inputSchema: preferredMeta.inputs || null,
+      outputSchema: preferredMeta.outputs || null,
+      providers,
+      preferredProvider: preferred.provider || cap.preferredProvider,
+      available,
       sideEffect,
       requiresApproval: cap.requiresApproval || preferred.requiresApproval || isOutboundCapability(cap.capabilityId),
       costCategory: costCategory(preferred.expectedCost),
+      costClass: costCategory(preferred.expectedCost).toUpperCase(),
       expectedCost: preferred.expectedCost ?? 0,
       timeoutMs: preferred.expectedLatencyMs ?? 8000,
-      retryPolicy: preferred.retryPolicy || defaultRetry(sideEffect),
-      idempotent: preferred.idempotent ?? sideEffect === SIDE_EFFECT.READ_ONLY,
-      prerequisites: preferred.prerequisites || [],
-      tags: preferred.tags || TAGS_BY_ID[cap.capabilityId] || [],
-      permissions: cap.permissions || []
+      retryPolicy: preferredMeta.retryPolicy || defaultRetry(sideEffect),
+      idempotent: preferredMeta.idempotent ?? sideEffect === SIDE_EFFECT.READ_ONLY,
+      prerequisites: preferredMeta.prerequisites || [],
+      tags: preferredMeta.tags || TAGS_BY_ID[cap.capabilityId] || [],
+      permissions: cap.permissions || [],
+      health: preferred.health || (available ? TOOL_HEALTH.HEALTHY : TOOL_HEALTH.UNAVAILABLE)
     };
-  });
+  }).filter((cap) => !availableOnly || cap.available);
 }
 
 export function catalogueHas(catalogue, capabilityId) {
@@ -127,5 +144,13 @@ export function catalogueHas(catalogue, capabilityId) {
 }
 
 export function pickCapability(catalogue, ids = []) {
-  return ids.find((id) => catalogueHas(catalogue, id)) || null;
+  return pickCapabilityEntry(catalogue, ids)?.capabilityId || null;
+}
+
+export function pickCapabilityEntry(catalogue, ids = []) {
+  for (const id of ids) {
+    const cap = catalogue.find((c) => c.capabilityId === id && c.available !== false && c.health !== 'UNAVAILABLE');
+    if (cap) return cap;
+  }
+  return null;
 }

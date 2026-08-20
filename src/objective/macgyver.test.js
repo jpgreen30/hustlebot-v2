@@ -32,6 +32,7 @@ function macgyverRegistry({ failDiscoverOnce = false } = {}) {
       }
       const query = String(input.query || input.objective || '');
       const roofing = /roof/i.test(query);
+      const logistics = /logistics|freight|3pl|trucking/i.test(query);
       const prospects = roofing
         ? [
           { organizationName: 'LA Roof Pros', website: 'https://laroofpros.example', domain: 'laroofpros.example', description: 'Residential roofing in Los Angeles' },
@@ -39,6 +40,12 @@ function macgyverRegistry({ failDiscoverOnce = false } = {}) {
           { organizationName: 'Sunset Roofing', website: 'https://sunsetroof.example', domain: 'sunsetroof.example', description: 'Commercial roofing LA' },
           { organizationName: 'Pacific Tarp & Roof', website: 'https://pacificroof.example', domain: 'pacificroof.example', description: 'Emergency roofing' },
           { organizationName: 'Hollywood Ridge Roofing', website: 'https://hwroof.example', domain: 'hwroof.example', description: 'AI-friendly home services' }
+        ]
+        : logistics
+        ? [
+          { organizationName: 'Pacific 3PL', website: 'https://pacific3pl.example', domain: 'pacific3pl.example', description: 'Los Angeles warehousing and last-mile logistics' },
+          { organizationName: 'Harbor Freight Lines', website: 'https://harborfreightlines.example', domain: 'harborfreightlines.example', description: 'Port of LA drayage and trucking' },
+          { organizationName: 'Valley Distribution Co', website: 'https://valleydistribution.example', domain: 'valleydistribution.example', description: 'Southern California freight and fulfillment' }
         ]
         : [
           { organizationName: 'Atwave', website: 'https://atwave.com', domain: 'atwave.com', description: 'Affiliate network' },
@@ -133,6 +140,7 @@ function macgyverRegistry({ failDiscoverOnce = false } = {}) {
     capabilityId: 'web.scrape',
     name: 'scrape',
     provider: 'firecrawl',
+    expectedCost: 0.002,
     handler: async () => { throw new Error('firecrawl down'); },
     isAvailable: () => true
   });
@@ -140,7 +148,16 @@ function macgyverRegistry({ failDiscoverOnce = false } = {}) {
     capabilityId: 'web.scrape',
     name: 'scrape-spider',
     provider: 'custom-spider',
+    expectedCost: 0,
     handler: async () => ({ status: 'ok', html: '<html></html>', provider: 'custom-spider' }),
+    isAvailable: () => true
+  });
+  r.register({
+    capabilityId: 'prospect.enrich',
+    name: 'apollo-enrich',
+    provider: 'apollo',
+    expectedCost: 0.03,
+    handler: async () => ({ status: 'ok', prospects: [] }),
     isAvailable: () => true
   });
   return r;
@@ -369,5 +386,102 @@ describe('MacGyver constraints + explainability', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('Day-6 MacGyver logistics + fabric + router', () => {
+  test('unknown logistics objective uses research_rank_search and never a logistics workflow', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mac-log-'));
+    const engine = new MacGyverEngine({
+      registry: macgyverRegistry(),
+      memory: new ObjectiveMemory({ dir })
+    });
+    try {
+      const raw = 'Research three Los Angeles logistics companies and give me a short comparison of their services and public web presence. Do not contact anyone.';
+      const interpreted = interpretObjective(raw);
+      assert.equal(interpreted.context.pattern, 'research_rank_search');
+      assert.match(interpreted.context.industry || '', /logistics/i);
+      assert.ok(interpreted.successCriteria.some((s) => s.type === 'comparison'));
+      const out = await engine.run({ rawRequest: raw });
+      assert.equal(out.status, 'ok');
+      assert.equal(out.plan.pattern, 'research_rank_search');
+      assert.ok(!out.plan.nodes.some((n) => /logistics/i.test(n.capabilityId) || n.capabilityId === 'campaign.prepare'));
+      assert.ok(out.result.top.some((p) => /3PL|Freight|Distribution/i.test(p.organizationName)));
+      assert.equal(out.contacted, false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('planner reasons mention health and cost, and prefer public-web over Apollo', () => {
+    const objective = interpretObjective('Find five Los Angeles-area roofing companies and rank three. Do not contact anyone.');
+    const catalogue = inspectCatalogue(macgyverRegistry());
+    const plan = planObjective(objective, catalogue);
+    assert.ok(plan.nodes.every((n) => n.reasonSelected));
+    assert.ok(plan.reasons.some((r) => /health|cost/i.test(r)));
+    assert.ok(!plan.nodes.some((n) => n.capabilityId === 'prospect.enrich'));
+    const scrape = catalogue.find((c) => c.capabilityId === 'web.scrape');
+    assert.equal(scrape.preferredProvider, 'custom-spider');
+    assert.equal(scrape.costClass, 'FREE');
+  });
+
+  test('health overlay marks firecrawl unavailable and prefers the healthy equivalent', () => {
+    const catalogue = inspectCatalogue(macgyverRegistry(), { healthOverlay: { firecrawl: 'UNAVAILABLE' } });
+    const scrape = catalogue.find((c) => c.capabilityId === 'web.scrape');
+    const firecrawl = scrape.providers.find((p) => p.provider === 'firecrawl');
+    const spider = scrape.providers.find((p) => p.provider === 'custom-spider');
+    assert.equal(firecrawl.available, false);
+    assert.equal(firecrawl.health, 'UNAVAILABLE');
+    assert.equal(spider.available, true);
+    assert.equal(scrape.preferredProvider, 'custom-spider');
+  });
+
+  test('LLM router fallback is recorded when the preferred planning model is forced down', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mac-llm-'));
+    const { LlmRouter, TASK_CLASS } = await import('../llm/router.js');
+    const calls = [];
+    const router = new LlmRouter({
+      client: {
+        async complete(prompt, options) {
+          calls.push(options.model);
+          return { content: JSON.stringify({ ok: true, model: options.model }), model: options.model, cost: 0 };
+        }
+      }
+    });
+    const preferred = router.select({ taskClass: TASK_CLASS.PLANNING }).preferredModel;
+    const engine = new MacGyverEngine({
+      registry: macgyverRegistry(),
+      memory: new ObjectiveMemory({ dir }),
+      router
+    });
+    try {
+      const out = await engine.run({
+        rawRequest: 'Find Affiliate Summit companies and rank them. Do not contact anyone.',
+        forceUnavailableModels: [preferred]
+      });
+      assert.equal(out.status, 'ok');
+      assert.equal(out.plan.llm.fallback, true);
+      assert.equal(out.plan.llm.preferredModel, preferred);
+      assert.notEqual(out.plan.llm.model, preferred);
+      assert.ok(out.objective.llm.planning.model);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('tool inspect phrases map without treating them as research runs', () => {
+    assert.equal(matchObjectiveControl('What tools do you have?').action, 'tools');
+    assert.equal(matchObjectiveControl('What MCP servers are connected?').action, 'mcp');
+    assert.equal(matchObjectiveControl('Is Apollo healthy?').action, 'health');
+    assert.equal(matchObjectiveControl('Which model planned this?').action, 'model');
+    assert.equal(matchObjectiveControl('Refresh your tools.').action, 'refresh');
+    assert.equal(matchObjectiveRun('What tools do you have?'), null);
+    const detector = new IntentDetector({ llm: null, registry: new CapabilityRegistry() });
+    const inspect = detector.hintToolInspectIntent('What tools do you have?');
+    assert.equal(inspect.capabilityId, 'fabric.inspect');
+    const refresh = detector.hintToolInspectIntent('Refresh your tools.');
+    assert.equal(refresh.capabilityId, 'mcp.refresh');
+    const logistics = detector.hintObjectiveRunIntent('Research three Los Angeles logistics companies and compare them. Do not contact anyone.');
+    assert.equal(logistics.capabilityId, 'objective.run');
   });
 });

@@ -17,6 +17,7 @@ import { ObjectiveMemory } from './memory.js';
 import { suggestStrategy } from './strategy.js';
 import { OBJECTIVE_STATUS, compactObjective } from './schema.js';
 import { formatObjectiveReply, matchObjectiveControl } from './control.js';
+import { TASK_CLASS } from '../llm/router.js';
 
 export class MacGyverEngine {
   constructor({
@@ -24,12 +25,16 @@ export class MacGyverEngine {
     approvalGate,
     n8n,
     memory,
-    email
+    email,
+    router,
+    fabric
   } = {}) {
     this.registry = registry;
     this.approvalGate = approvalGate;
     this.n8n = n8n;
     this.email = email || null;
+    this.router = router || null;
+    this.fabric = fabric || null;
     this.memory = memory || new ObjectiveMemory();
     this.objectives = new Map();
   }
@@ -67,8 +72,10 @@ export class MacGyverEngine {
     return this.memory.list(limit).map(compactObjective);
   }
 
-  catalogue(options) {
-    return inspectCatalogue(this.registry, options);
+  catalogue(options = {}) {
+    const overlay = { ...(this.fabric?.healthOverlay?.() || {}), ...(options.healthOverlay || {}) };
+    for (const provider of options.forceUnavailable || []) overlay[provider] = 'UNAVAILABLE';
+    return inspectCatalogue(this.registry, { ...options, healthOverlay: overlay });
   }
 
   async run(input = {}) {
@@ -86,7 +93,10 @@ export class MacGyverEngine {
   }
 
   async _executeStarted(objective, input = {}, startedAt = Date.now()) {
-    const catalogue = this.catalogue({ availableOnly: true });
+    const catalogue = this.catalogue({
+      availableOnly: true,
+      forceUnavailable: input.forceUnavailable
+    });
     const strategy = suggestStrategy(objective, this.memory.list(20));
     objective.strategy = strategy;
 
@@ -98,6 +108,43 @@ export class MacGyverEngine {
       objective.error = error.message;
       this.persist(objective);
       return { status: 'failed', objective, error: error.message };
+    }
+
+    if (this.router) {
+      try {
+        const routing = await this.router.complete({
+          taskClass: TASK_CLASS.PLANNING,
+          prompt: [
+            'Record a PLANNING route for this MacGyver objective.',
+            'The DAG is composed deterministically from the live catalogue; do not invent tools.',
+            `Objective: ${objective.rawRequest}`,
+            `Pattern: ${plan.pattern}`,
+            `Nodes: ${plan.nodes.map((n) => n.capabilityId).join(' -> ')}`,
+            'Return JSON {"ok":true,"pattern":"...","capabilities":[]}'
+          ].join('\n'),
+          structuredOutputRequired: true,
+          forceUnavailableModels: input.forceUnavailableModels || []
+        });
+        plan.llm = {
+          taskClass: TASK_CLASS.PLANNING,
+          model: routing.model || null,
+          preferredModel: routing.preferredModel || null,
+          fallback: routing.fallback === true,
+          fallbackReason: routing.fallbackReason || (routing.status !== 'ok' ? routing.error : null),
+          status: routing.status,
+          attempts: routing.attempts || []
+        };
+      } catch (error) {
+        plan.llm = {
+          taskClass: TASK_CLASS.PLANNING,
+          model: null,
+          preferredModel: null,
+          fallback: false,
+          fallbackReason: error.message,
+          status: 'failed'
+        };
+      }
+      objective.llm = { planning: plan.llm };
     }
 
     const validation = validatePlan(plan, { catalogue, objective, registry: this.registry });
@@ -136,7 +183,11 @@ export class MacGyverEngine {
       actor: input.actor || 'macgyver',
       permissions: input.permissions || ['network.read', 'data.read', 'data.write', 'external.send', 'telephony'],
       bypassPermissions: input.bypassPermissions !== false,
-      forceUnavailable: input.forceUnavailable || [],
+      forceUnavailable: [
+        ...(input.forceUnavailable || []),
+        ...Object.keys(this.fabric?.healthOverlay?.() || {})
+      ],
+      healthOverlay: this.fabric?.healthOverlay?.() || {},
       vertical: input.vertical,
       allowFallback: true
     };
@@ -289,12 +340,13 @@ export class MacGyverEngine {
       }
     }
 
-    const reportNode = outputs.report || outputs.score || outputs.qualify || outputs.contacts || outputs.research || outputs.discover;
+    const reportNode = outputs.compare || outputs.report || outputs.score || outputs.qualify || outputs.contacts || outputs.research || outputs.discover;
     const prospects = reportNode?.top || reportNode?.prospects || [];
     objective.result = {
       prospects,
       top: (reportNode?.top || prospects).slice(0, objective.context?.topN || 5),
-      report: reportNode?.report || this.formatResult(objective, prospects),
+      report: reportNode?.report || reportNode?.comparison || this.formatResult(objective, prospects),
+      comparison: reportNode?.comparison || null,
       providers: [...new Set(objective.executions.map((e) => e.provider).filter(Boolean))]
     };
     const failed = (plan.nodes || []).filter((n) => n.status === 'failed');
@@ -304,6 +356,34 @@ export class MacGyverEngine {
     if (failed.length) objective.error = failed.map((n) => `${n.id}: ${n.error}`).join('; ');
     objective.contacted = false;
     this.persist(objective);
+
+    if (this.router && objective.status === OBJECTIVE_STATUS.COMPLETED) {
+      const wantsCompare = (objective.successCriteria || []).some((s) => s.type === 'comparison')
+        || /compar/i.test(objective.rawRequest || '');
+      if (wantsCompare) {
+        try {
+          const top = objective.result.top || [];
+          const sum = await this.router.complete({
+            taskClass: TASK_CLASS.SUMMARIZATION,
+            prompt: `Compare these organizations using only the supplied evidence. Do not invent contacts, emails, or facts.\n${JSON.stringify(top.map((p) => ({
+              name: p.organizationName || p.name,
+              website: p.website,
+              description: p.description || p.intelligence?.description?.value
+            })))}\nReturn a short comparison.`
+          });
+          objective.result.comparison = sum.text || sum.content || objective.result.comparison;
+          objective.llm = {
+            ...(objective.llm || {}),
+            summarization: { model: sum.model, fallback: sum.fallback, status: sum.status }
+          };
+          if (objective.result.comparison) {
+            objective.result.report = `${objective.result.report || ''}\n\nComparison:\n${objective.result.comparison}`;
+          }
+        } catch (error) {
+          logger.warn(`Comparison summarization failed: ${error.message}`);
+        }
+      }
+    }
 
     if (this.n8n?.execute && objective.status === OBJECTIVE_STATUS.COMPLETED) {
       const wf = await this.n8n.execute('campaign-prepare', {
@@ -434,9 +514,71 @@ export class MacGyverEngine {
     };
   }
 
+  async inspectTools(matched = {}) {
+    const action = matched.action;
+    const query = matched.query || '';
+    if (action === 'refresh' || /refresh/i.test(query)) {
+      if (!this.fabric?.refresh) return { status: 'unavailable', report: 'Tool fabric is not initialized.' };
+      const result = await this.fabric.refresh();
+      return {
+        status: 'ok',
+        report: `Tools refreshed. ${result.visible} planner-visible, ${result.quarantined} quarantined of ${result.discovered} discovered.`,
+        result
+      };
+    }
+    if (action === 'mcp' || /mcp/i.test(query)) {
+      const inspect = this.fabric?.inspect('mcp servers connected') || { report: 'No MCP servers registered.' };
+      return { status: 'ok', report: inspect.report, servers: inspect.servers };
+    }
+    if (action === 'model' || /which model planned/i.test(query)) {
+      const record = this.get('latest');
+      const planning = record?.llm?.planning;
+      if (!planning) return { status: 'ok', report: 'No planning model recorded yet.' };
+      const fallback = planning.fallback ? ` (fallback from ${planning.preferredModel}: ${planning.fallbackReason || 'preferred unavailable'})` : '';
+      return { status: 'ok', report: `Planning model ${planning.model || 'none'}${fallback}.`, planning };
+    }
+    if (action === 'health' || /apollo|firecrawl/i.test(query)) {
+      const catalogue = this.catalogue({ availableOnly: false });
+      const needle = /apollo/i.test(query) ? 'apollo' : /firecrawl/i.test(query) ? 'firecrawl' : null;
+      const providers = catalogue.flatMap((c) => (c.providers || []).map((p) => ({ capabilityId: c.capabilityId, ...p })));
+      const matches = needle ? providers.filter((p) => String(p.provider).toLowerCase().includes(needle)) : providers;
+      const lines = matches.slice(0, 20).map((p) => `${p.provider} on ${p.capabilityId}: ${p.health} available=${p.available}`);
+      return { status: 'ok', report: lines.join('\n') || 'No matching providers.', providers: matches };
+    }
+    if (action === 'web-research') {
+      const catalogue = this.catalogue({ availableOnly: true });
+      const web = catalogue.filter((c) => /web\.|org\.discover|company\.research/.test(c.capabilityId));
+      return {
+        status: 'ok',
+        report: web.map((c) => `${c.capabilityId} via ${c.preferredProvider} (${c.health}, ${c.costClass})`).join('\n') || 'No web research tools.',
+        tools: web
+      };
+    }
+    if (this.fabric?.inspect) {
+      const inspect = this.fabric.inspect(query || 'tools');
+      const native = this.catalogue({ availableOnly: true }).slice(0, 30)
+        .map((c) => `${c.capabilityId} · ${c.preferredProvider} · ${c.health} · ${c.costClass}`);
+      const report = [
+        inspect.report,
+        native.length ? `\nNative/provider capabilities:\n${native.join('\n')}` : ''
+      ].join('\n').trim();
+      return { status: 'ok', report, tools: inspect.tools };
+    }
+    const catalogue = this.catalogue({ availableOnly: true });
+    return {
+      status: 'ok',
+      report: catalogue.map((c) => `${c.capabilityId} · ${c.preferredProvider} · ${c.health} · ${c.costClass}`).join('\n'),
+      tools: catalogue
+    };
+  }
+
   async control(input = {}) {
     const matched = typeof input === 'string' ? matchObjectiveControl(input) : input;
     const action = matched?.action || input.action || input.query;
+    const inspectActions = new Set(['tools', 'mcp', 'refresh', 'health', 'model', 'web-research']);
+    if (inspectActions.has(matched?.action) || inspectActions.has(String(action))) {
+      return this.inspectTools(matched || { action, query: input.query || String(action) });
+    }
     const record = this.get(input.objectiveId || 'latest');
     if (!record && !/run|start/i.test(String(action))) {
       return { status: 'empty', report: 'No objective is loaded yet.' };
@@ -479,7 +621,9 @@ export class MacGyverEngine {
       return { status: 'ok', report: failed.length ? failed.map((e) => `${e.nodeId}: ${e.error}`).join('\n') : 'No failures recorded.' };
     }
     if (matched?.action === 'cost') {
-      return { status: 'ok', report: `Estimated/observed cost ${record.cost || 0}` };
+      const planning = record.llm?.planning;
+      const modelLine = planning?.model ? ` Planning model ${planning.model}${planning.fallback ? ` (fallback from ${planning.preferredModel})` : ''}.` : '';
+      return { status: 'ok', report: `Estimated/observed cost ${record.cost || 0}.${modelLine}` };
     }
     if (matched?.action === 'blocking') {
       return {
