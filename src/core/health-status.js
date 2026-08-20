@@ -156,7 +156,12 @@ export async function collectDay1Health(server = {}) {
     return { state: 'UNAVAILABLE', detail: 'outreach email provider not initialized' };
   });
 
-  const services = { telegram, deepgram, openrouter, retell, n8n, heygen, redis, supabase, firecrawl, spider, browser, apollo, email };
+  const durableRuntime = await safe('durableRuntime', async () => {
+    if (server.durableRuntime?.health) return server.durableRuntime.health();
+    return { state: 'UNAVAILABLE', detail: 'durable runtime not initialized' };
+  });
+
+  const services = { telegram, deepgram, openrouter, retell, n8n, heygen, redis, supabase, firecrawl, spider, browser, apollo, email, durableRuntime };
   for (const [name, value] of Object.entries(services)) {
     if (!STATES.includes(value.state)) {
       services[name] = { state: 'UNVERIFIED', detail: `invalid state from ${name}` };

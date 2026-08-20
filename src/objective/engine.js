@@ -30,7 +30,10 @@ export class MacGyverEngine {
     memory,
     email,
     router,
-    fabric
+    fabric,
+    journal,
+    operationalMemory,
+    runtime
   } = {}) {
     this.registry = registry;
     this.approvalGate = approvalGate;
@@ -39,18 +42,43 @@ export class MacGyverEngine {
     this.router = router || null;
     this.fabric = fabric || null;
     this.memory = memory || new ObjectiveMemory();
+    this.journal = journal || null;
+    this.operationalMemory = operationalMemory || null;
+    this.runtime = runtime || null;
     this.objectives = new Map();
     this.swarm = new SwarmOrchestrator(this);
+    this.hydrate();
   }
 
   isAvailable() {
     return Boolean(this.registry);
   }
 
+  hydrate() {
+    let records = [];
+    try { records = this.memory.list(100); } catch { records = []; }
+    for (const rec of records) {
+      if (rec?.objectiveId) this.objectives.set(rec.objectiveId, rec);
+    }
+    return records;
+  }
+
   persist(record) {
     record.updatedAt = new Date().toISOString();
     this.objectives.set(record.objectiveId, record);
     this.memory.save(this.safeRecord(record));
+    const cp = this.runtime?.checkpointObjective?.(record);
+    if (cp && typeof cp.then === 'function') cp.catch(() => {});
+    this.journal?.append({
+      type: `objective.${record.status}`,
+      objectiveId: record.objectiveId,
+      actor: record.actor || 'macgyver',
+      metadata: {
+        specialists: (record.specialists || []).length,
+        planId: record.planId || record.plan?.planId || null,
+        contacted: record.contacted === true
+      }
+    });
     return record;
   }
 
@@ -101,7 +129,7 @@ export class MacGyverEngine {
       availableOnly: true,
       forceUnavailable: input.forceUnavailable
     });
-    const strategy = suggestStrategy(objective, this.memory.list(20));
+    const strategy = suggestStrategy(objective, this.memory.list(20), this.recallOperational(objective));
     objective.strategy = strategy;
     const decision = decideDelegation(objective, { catalogue });
     objective.delegation = {
@@ -183,12 +211,89 @@ export class MacGyverEngine {
     }
 
     if (decision.delegate && input.forceDirect !== true) {
-      return this.swarm.execute(objective, decision, catalogue, input);
+      const result = await this.swarm.execute(objective, decision, catalogue, input);
+      this.checkpointMemory(objective);
+      return result;
     }
 
     const result = await this.executePlan(objective, plan, catalogue, input);
     result.durationMs = Date.now() - startedAt;
+    this.checkpointMemory(objective);
     return result;
+  }
+
+  recallOperational(objective) {
+    if (!this.operationalMemory?.recall) return [];
+    const q = `${objective.context?.industry || ''} ${objective.context?.location || ''} ${objective.rawRequest || ''}`;
+    return this.operationalMemory.recall({ query: q, limit: 5 });
+  }
+
+  checkpointMemory(objective) {
+    if (!this.operationalMemory || objective.status !== OBJECTIVE_STATUS.COMPLETED) return;
+    const executions = objective.executions || [];
+    const fallbacks = executions.filter((e) => /fallback|alternate|switch-provider/i.test(`${e.reasonSelected || ''} ${e.error || ''}`));
+    if (fallbacks.length) {
+      this.operationalMemory.remember({
+        type: 'pattern',
+        subject: `provider.${fallbacks[0].provider || 'unknown'}`,
+        content: `Objective ${objective.objectiveId} recovered via ${fallbacks.map((f) => f.reasonSelected || f.provider).join('; ')}`,
+        sourceRefs: [objective.objectiveId],
+        confidence: 0.65,
+        tags: ['provider', 'fallback'],
+        actor: 'macgyver',
+        objectiveId: objective.objectiveId,
+        expiresAt: new Date(Date.now() + 30 * 24 * 3600 * 1000).toISOString()
+      });
+    }
+    if ((objective.specialists || []).length) {
+      this.operationalMemory.remember({
+        type: 'playbook',
+        subject: objective.context?.pattern || 'research',
+        content: `Delegation with ${(objective.specialists || []).length} specialists completed for ${objective.context?.industry || 'research'} in ${objective.context?.location || 'unspecified'}.`,
+        sourceRefs: [objective.objectiveId],
+        confidence: 0.6,
+        tags: ['delegation', objective.context?.industry].filter(Boolean),
+        actor: 'macgyver',
+        objectiveId: objective.objectiveId
+      });
+    }
+  }
+
+  canResumeSwarm(record) {
+    return Boolean(record?.delegation?.delegate) || (record?.specialists || []).some((s) => s.specialistId);
+  }
+
+  async continue(objectiveId, input = {}) {
+    const record = this.get(objectiveId);
+    if (!record) return { status: 'empty', report: 'Unknown objective' };
+    if (record.status === OBJECTIVE_STATUS.COMPLETED) {
+      return { status: 'ok', objective: record, skipped: true, reason: 'already completed', contacted: false };
+    }
+    if (record.status === OBJECTIVE_STATUS.CANCELLED) {
+      return { status: 'cancelled', objective: record };
+    }
+    if (record.status === OBJECTIVE_STATUS.PAUSED) {
+      return { status: 'paused', objective: record, report: `Objective ${record.objectiveId} is paused.` };
+    }
+    if (record.status === OBJECTIVE_STATUS.AWAITING_APPROVAL && record.approvalId) {
+      return this.resume(record.objectiveId);
+    }
+    const catalogue = this.catalogue({ availableOnly: true, forceUnavailable: input.forceUnavailable });
+    if (this.canResumeSwarm(record)) {
+      record.status = OBJECTIVE_STATUS.RUNNING;
+      record.delegation = {
+        ...(record.delegation || {}),
+        delegate: true,
+        reconstructed: record.delegation?.delegate !== true,
+        reason: record.delegation?.reason || 'reconstructed from persisted specialists'
+      };
+      this.persist(record);
+      return this.swarm.execute(record, record.delegation, catalogue, input);
+    }
+    if (record.plan) {
+      return this.executePlan(record, record.plan, catalogue, input);
+    }
+    return this._executeStarted(record, input);
   }
 
   async executePlan(objective, plan, catalogue, input = {}) {
@@ -707,6 +812,11 @@ export class MacGyverEngine {
     if (inspectActions.has(matched?.action) || inspectActions.has(String(action))) {
       return this.inspectTools(matched || { action, query: input.query || String(action) });
     }
+    const opsActions = new Set(['queue', 'scheduled', 'overnight', 'memory-inspect', 'approvals-inspect']);
+    if (opsActions.has(matched?.action) && this.runtime?.inspect) {
+      const result = await this.runtime.inspect(matched.action === 'memory-inspect' ? 'memory' : matched.action === 'approvals-inspect' ? 'approvals' : matched.action, matched.query);
+      return { status: 'ok', report: result?.report || 'No data.', ...result };
+    }
     const swarmActions = new Set(['workers', 'why-delegate', 'worker-models', 'worker-tools', 'worker-findings', 'stop-workers', 'pause']);
     const record = this.get(input.objectiveId || 'latest');
     if (swarmActions.has(matched?.action)) {
@@ -729,10 +839,22 @@ export class MacGyverEngine {
       if (record.status === OBJECTIVE_STATUS.AWAITING_APPROVAL && record.approvalId) {
         return this.resume(record.objectiveId);
       }
-      if (record.status === OBJECTIVE_STATUS.PAUSED && record.delegation?.delegate) {
+      if (record.status === OBJECTIVE_STATUS.PAUSED && this.canResumeSwarm(record)) {
         record.status = OBJECTIVE_STATUS.RUNNING;
+        record.delegation = {
+          ...(record.delegation || {}),
+          delegate: true,
+          reconstructed: record.delegation?.delegate !== true,
+          reason: record.delegation?.reason || 'reconstructed from persisted specialists'
+        };
+        this.persist(record);
         const catalogue = this.catalogue({ availableOnly: true });
         return this.swarm.execute(record, record.delegation, catalogue, { actor: 'telegram' });
+      }
+      if (record.status === OBJECTIVE_STATUS.PAUSED && record.plan) {
+        record.status = OBJECTIVE_STATUS.RUNNING;
+        this.persist(record);
+        return this.executePlan(record, record.plan, this.catalogue({ availableOnly: true }), { actor: 'telegram' });
       }
       return { status: 'ok', report: `Objective ${record.objectiveId} is ${record.status}.` };
     }

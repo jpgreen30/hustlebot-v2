@@ -674,4 +674,42 @@ describe('Day-7 critic repair + pause', () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  test('paused swarm resumes after reconstruction even if delegation.delegate is missing', async () => {
+    const r = new CapabilityRegistry();
+    const calls = [];
+    researchCaps(r, async (input) => {
+      calls.push(input.industry || input.query || 'x');
+      return { status: 'ok', prospects: [{ organizationName: `${input.industry || 'Co'} Inc`, website: `https://${(input.industry || 'co').replace(/\s+/g, '')}.example` }] };
+    });
+    const dir = mkdtempSync(join(tmpdir(), 'd8-resume-'));
+    const first = new MacGyverEngine({ registry: r, memory: new ObjectiveMemory({ dir }) });
+    try {
+      const objective = interpretObjective('Research 15 companies across solar, roofing, and HVAC in Los Angeles. Do not contact anyone.');
+      const decision = decideDelegation(objective);
+      const specialists = first.swarm.compose(objective, decision, inspectCatalogue(r));
+      specialists[0].status = SPECIALIST_STATUS.COMPLETED;
+      specialists[0].result = { status: 'ok', findings: [{ organizationName: 'Solar Co' }], recommendations: [], gaps: [], confidence: 0.7 };
+      specialists[1].status = SPECIALIST_STATUS.WAITING;
+      objective.specialists = specialists;
+      objective.status = 'paused';
+      objective.delegation = { reason: 'sliced', estimatedWorkers: 5, slices: decision.slices };
+      first.persist(objective);
+
+      const second = new MacGyverEngine({ registry: r, memory: new ObjectiveMemory({ dir }) });
+      const loaded = second.get(objective.objectiveId);
+      assert.equal(loaded.status, 'paused');
+      assert.equal(loaded.delegation?.delegate, undefined);
+      const resumed = await second.control({ action: 'resume', query: 'Resume the objective.', objectiveId: objective.objectiveId });
+      assert.ok(resumed.status === 'ok' || resumed.objective);
+      const after = second.get(objective.objectiveId);
+      assert.notEqual(after.status, 'paused');
+      assert.equal(after.specialists[0].status, SPECIALIST_STATUS.COMPLETED);
+      assert.equal(after.specialists[0].result.findings[0].organizationName, 'Solar Co');
+      assert.ok(after.delegation.delegate === true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
+

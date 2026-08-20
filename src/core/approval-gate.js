@@ -23,6 +23,8 @@
 
 import Redis from 'ioredis';
 import { randomUUID } from 'crypto';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import logger from '../utils/logger.js';
 
 const APPROVAL_STATUS = {
@@ -154,6 +156,34 @@ class MemoryApprovalStore {
   }
 }
 
+class FileApprovalStore {
+  constructor(dir) {
+    this.dir = dir;
+    mkdirSync(dir, { recursive: true });
+  }
+  pathFor(id) { return join(this.dir, `${id}.json`); }
+  async save(req) {
+    writeFileSync(this.pathFor(req.id), JSON.stringify(req, null, 2));
+  }
+  async load(id) {
+    const path = this.pathFor(id);
+    if (!existsSync(path)) return null;
+    try { return JSON.parse(readFileSync(path, 'utf8')); } catch { return null; }
+  }
+  async pendingIds() {
+    const all = await this.allIds();
+    const pending = [];
+    for (const id of all) {
+      const rec = await this.load(id);
+      if (rec?.status === APPROVAL_STATUS.PENDING) pending.push(id);
+    }
+    return pending;
+  }
+  async allIds() {
+    return readdirSync(this.dir).filter((f) => f.endsWith('.json')).map((f) => f.replace(/\.json$/, ''));
+  }
+}
+
 class ApprovalGate {
   constructor(config = {}) {
     this.registry = config.registry || null;
@@ -169,6 +199,7 @@ class ApprovalGate {
     this.redisUrl = config.redisUrl || process.env.REDIS_URL || null;
     this.ownsRedis = false;
     this.store = null;
+    this.dataDir = config.dataDir || process.env.HUSTLEBOT_DATA_DIR || null;
 
     this.policies = [
       ...defaultPolicies({
@@ -208,6 +239,10 @@ class ApprovalGate {
       this.store = new RedisApprovalStore(this.redis, this.namespace);
       this.durable = true;
       logger.info('🔐 Approval gate using Redis storage (pending approvals survive restarts)');
+    } else if (this.dataDir) {
+      this.store = new FileApprovalStore(join(this.dataDir, 'approvals'));
+      this.durable = true;
+      logger.info('🔐 Approval gate using file storage (pending approvals survive process death)');
     } else {
       this.store = new MemoryApprovalStore();
       this.durable = false;

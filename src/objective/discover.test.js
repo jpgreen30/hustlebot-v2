@@ -129,4 +129,35 @@ describe('OrgDiscovery search-shaped routing', () => {
     assert.ok(out.prospects.some((p) => p.organizationName === 'Lang Roofing Inc'));
     assert.ok(out.providers.includes('firecrawl') || out.providers.includes('browser-render'));
   });
+
+  test('company/product ranking prefers real products over encyclopedia and clinical articles', async () => {
+    const discovery = new OrgDiscovery({
+      search: {
+        search: async () => ({
+          status: 'ok',
+          provider: 'bing',
+          results: [
+            { title: 'Pregnancy - Cleveland Clinic', url: 'https://my.clevelandclinic.org/health/articles/pregnancy', snippet: 'Clinical overview of pregnancy' },
+            { title: 'CDC Pregnancy', url: 'https://www.cdc.gov/pregnancy/index.html', snippet: 'CDC guidelines' },
+            { title: 'Pregnancy - Wikipedia', url: 'https://en.wikipedia.org/wiki/Pregnancy' },
+            { title: 'Best pregnancy apps YouTube', url: 'https://www.youtube.com/watch?v=abc123', snippet: 'Video roundup' },
+            { title: 'Peanut App', url: 'https://www.peanut-app.io', snippet: 'Social network app for women and mothers' },
+            { title: 'The Bump', url: 'https://www.thebump.com', snippet: 'Pregnancy and baby tracking app' },
+            { title: 'Ovia Health', url: 'https://www.oviahealth.com', snippet: 'Pregnancy tracker app and platform' },
+            { title: 'What to Expect', url: 'https://www.whattoexpect.com', snippet: 'Pregnancy app and parenting community platform' }
+          ]
+        })
+      }
+    });
+    const out = await discovery.discover({
+      query: 'pregnancy apps and parenting platforms',
+      objective: 'Research 10 pregnancy apps and parenting platforms. Do not contact anyone.',
+      maxOrganizations: 8
+    });
+    assert.equal(out.status, 'ok');
+    const names = out.prospects.map((p) => p.organizationName).join(' ');
+    assert.match(names, /Peanut|Ovia|Bump|What to Expect/i);
+    assert.ok(!out.prospects.some((p) => /cleveland|cdc|wikipedia|youtube/i.test(`${p.organizationName} ${p.website}`)));
+  });
 });
+

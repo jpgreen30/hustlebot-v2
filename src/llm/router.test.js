@@ -89,4 +89,24 @@ describe('Day-6 LLM router', () => {
     const chat = router.select({ taskClass: TASK_CLASS.CHAT });
     assert.ok(['deepseek/deepseek-chat', 'google/gemini-2.0-flash', 'x-ai/grok-4.5'].includes(chat.selectedModel));
   });
+
+  test('REASONING falls back to grok when claude is forced down', async () => {
+    const client = fakeClient();
+    const router = new LlmRouter({ client });
+    const preferred = router.select({ taskClass: TASK_CLASS.REASONING }).preferredModel;
+    assert.equal(preferred, 'anthropic/claude-sonnet-4.5');
+    const result = await router.complete({
+      taskClass: TASK_CLASS.REASONING,
+      prompt: 'critique this',
+      structuredOutputRequired: true,
+      forceUnavailableModels: [preferred]
+    });
+    assert.equal(result.status, 'ok');
+    assert.notEqual(result.model, preferred);
+    assert.ok(result.model);
+    assert.equal(result.fallback, true);
+    const eligible = router.select({ taskClass: TASK_CLASS.REASONING, forceUnavailableModels: [preferred] }).eligible;
+    assert.ok(eligible.includes('x-ai/grok-4.5'));
+    assert.ok(eligible.length >= 2);
+  });
 });

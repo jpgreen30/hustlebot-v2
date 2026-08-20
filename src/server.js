@@ -97,6 +97,11 @@ import { registerObjectiveCapabilities } from './objective/register.js';
 import { matchObjectiveControl, matchObjectiveRun } from './objective/control.js';
 import { ToolFabric, registerFabricCapabilities } from './fabric/index.js';
 import { LlmRouter } from './llm/router.js';
+import { DurableRuntime } from './runtime/runtime.js';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const HUSTLEBOT_DATA_DIR = process.env.HUSTLEBOT_DATA_DIR || join(dirname(fileURLToPath(import.meta.url)), '.data');
 
 class HustleBotServer {
   constructor() {
@@ -168,6 +173,7 @@ class HustleBotServer {
     this.outreachEvents = null;
     this.orgDiscovery = null;
     this.macgyverEngine = null;
+    this.durableRuntime = null;
     // Diagnostics
     this.initializationErrors = [];
   }
@@ -616,6 +622,7 @@ class HustleBotServer {
         this.approvalGate = new ApprovalGate({
           registry: this.capabilityRegistry,
           redis: this.mailbox?.redis || null,
+          dataDir: HUSTLEBOT_DATA_DIR,
           spendThreshold: parseFloat(process.env.APPROVAL_SPEND_THRESHOLD || '5'),
           campaignThreshold: parseInt(process.env.APPROVAL_CAMPAIGN_THRESHOLD || '100'),
           ttlMs: parseInt(process.env.APPROVAL_TTL_MS || String(24 * 60 * 60 * 1000)),
@@ -774,6 +781,7 @@ class HustleBotServer {
         // Platform-level durable queue, separate from the content factory's.
         this.jobQueue = new JobQueue({
           redis: this.mailbox?.redis || null,
+          dataDir: HUSTLEBOT_DATA_DIR,
           namespace: 'jobs:platform',
           maxConcurrent: parseInt(process.env.MAX_CONCURRENT_PLANS || '2'),
           jobTimeout: parseInt(process.env.PLAN_TIMEOUT_MS || '600000')
@@ -790,6 +798,23 @@ class HustleBotServer {
         // a handler waiting for it.
         this.jobQueue.registerHandler('plan.execute', this.planner.planExecutionHandler());
         await this.jobQueue.start();
+
+        try {
+          this.durableRuntime = new DurableRuntime({
+            dataDir: HUSTLEBOT_DATA_DIR,
+            jobQueue: this.jobQueue,
+            engine: this.macgyverEngine,
+            approvalGate: this.approvalGate,
+            n8n: this.n8nIntegration,
+            redis: this.mailbox?.redis || null,
+            telegram: this.bot
+          });
+          await this.durableRuntime.start();
+          logger.info('✅ Day-8 durable runtime ready');
+        } catch (error) {
+          logger.warn('⚠️  Day-8 durable runtime failed, continuing:', error.message);
+          this.initializationErrors.push({ module: 'durable-runtime', error: error.message });
+        }
 
         logger.info('✅ Planner ready');
       } catch (error) {
@@ -900,11 +925,15 @@ class HustleBotServer {
   setupRoutes() {
     // Health check
     this.app.get('/health', (req, res) => {
+      const runtime = this.durableRuntime?.health?.() || { state: 'UNAVAILABLE', detail: 'not initialized' };
       res.json({
         status: 'ok',
         timestamp: new Date().toISOString(),
         service: 'hustlebot-v2',
-        revision: process.env.RENDER_GIT_COMMIT || null
+        revision: process.env.RENDER_GIT_COMMIT || null,
+        api: 'HEALTHY',
+        durableRuntime: runtime.state,
+        runtime
       });
     });
 
@@ -1288,7 +1317,12 @@ class HustleBotServer {
     this.app.get('/api/jobs', async (req, res) => {
       try {
         if (!this.jobQueue) return res.status(503).json({ error: 'Job queue not initialized' });
-        res.json(await this.jobQueue.getStats());
+        const stats = await this.jobQueue.getStats();
+        const jobs = await this.jobQueue.listJobs({
+          status: req.query.status,
+          limit: Number(req.query.limit || 50)
+        });
+        res.json({ ...stats, jobs });
       } catch (error) {
         res.status(500).json({ error: error.message });
       }
@@ -2078,6 +2112,73 @@ class HustleBotServer {
         arbitration: record?.arbitration || null,
         critic: record?.critic || null
       });
+    });
+
+    this.app.get('/api/schedules', this.actionAuth, (req, res) => {
+      if (!this.durableRuntime) return res.status(503).json({ error: 'Durable runtime not initialized' });
+      res.json(this.durableRuntime.scheduler.inspect());
+    });
+
+    this.app.post('/api/schedules', this.actionAuth, this.actionRateLimit, (req, res) => {
+      if (!this.durableRuntime) return res.status(503).json({ error: 'Durable runtime not initialized' });
+      const created = this.durableRuntime.scheduler.create(req.body || {});
+      const status = created.blocked ? 403 : 200;
+      res.status(status).json(created);
+    });
+
+    this.app.post('/api/schedules/:scheduleId/:action', this.actionAuth, this.actionRateLimit, (req, res) => {
+      if (!this.durableRuntime) return res.status(503).json({ error: 'Durable runtime not initialized' });
+      const { scheduleId, action } = req.params;
+      let rec = null;
+      if (action === 'pause') rec = this.durableRuntime.scheduler.pause(scheduleId);
+      else if (action === 'resume') rec = this.durableRuntime.scheduler.resume(scheduleId);
+      else if (action === 'cancel') rec = this.durableRuntime.scheduler.cancel(scheduleId);
+      else if (action === 'delete') rec = this.durableRuntime.scheduler.remove(scheduleId);
+      else return res.status(400).json({ error: `Unknown action ${action}` });
+      if (!rec) return res.status(404).json({ error: 'Schedule not found' });
+      res.json(rec);
+    });
+
+    this.app.get('/api/memory', this.actionAuth, (req, res) => {
+      if (!this.durableRuntime) return res.status(503).json({ error: 'Durable runtime not initialized' });
+      const items = req.query.q
+        ? this.durableRuntime.memory.recall({ query: req.query.q, limit: Number(req.query.limit || 10) })
+        : this.durableRuntime.memory.list(Number(req.query.limit || 20));
+      res.json({ memories: items });
+    });
+
+    this.app.get('/api/runtime', this.actionAuth, async (req, res) => {
+      if (!this.durableRuntime) return res.status(503).json({ error: 'Durable runtime not initialized' });
+      const snapshot = this.durableRuntime.snapshot();
+      snapshot.queue = this.jobQueue ? await this.jobQueue.getStats() : null;
+      snapshot.jobs = this.jobQueue ? await this.jobQueue.listJobs({ limit: 20 }) : [];
+      snapshot.approvals = this.approvalGate ? await this.approvalGate.list({ status: 'pending' }).catch(() => []) : [];
+      res.json(snapshot);
+    });
+
+    this.app.get('/day8', async (req, res) => {
+      const runtime = this.durableRuntime?.health?.() || {};
+      const snapshot = this.durableRuntime?.snapshot?.() || {};
+      const stats = this.jobQueue ? await this.jobQueue.getStats() : {};
+      const email = this.outreachEmail?.isAvailable?.() ? 'configured' : 'UNAVAILABLE';
+      res.type('html').send(`<!doctype html>
+<html><head><meta charset="utf-8"><title>HustleBot Day-8</title>
+<style>body{font-family:ui-sans-serif,system-ui;background:#0f1419;color:#e7ecf1;margin:0;padding:32px;max-width:1040px}h1{margin:0 0 8px}code,pre{background:#1b232c;padding:12px;border-radius:8px;display:block;overflow:auto} .ok{color:#7dce82}.bad{color:#ff8b8b}</style>
+</head><body>
+<h1>HustleBot Day-8 Durable Runtime</h1>
+<p>Jobs, leases, scheduler, and operational memory survive process restarts. MacGyver remains the brain. n8n records.</p>
+<p>Email: <span class="${email === 'configured' ? 'ok' : 'bad'}">${email}</span>
+ · Runtime: <span class="${runtime.state === 'HEALTHY' ? 'ok' : 'bad'}">${runtime.state || 'UNAVAILABLE'}</span>
+ · Queue backend: ${stats.backend || 'n/a'}</p>
+<h2>Startup recovery</h2>
+<pre>${JSON.stringify(runtime.startup || this.durableRuntime?.startupReport || {}, null, 2)}</pre>
+<h2>Queue</h2>
+<pre>${JSON.stringify(stats, null, 2)}</pre>
+<h2>Schedules</h2>
+<pre>${JSON.stringify(snapshot.schedules || {}, null, 2)}</pre>
+<h2>Memory / journal</h2>
+<pre>${JSON.stringify({ memories: snapshot.memories, journalTail: snapshot.journalTail }, null, 2)}</pre>
+</body></html>`);
     });
 
     this.app.get('/day7', (req, res) => {
@@ -3285,6 +3386,20 @@ class HustleBotServer {
       return { reply, kind: 'status', snapshot };
     }
 
+    if (this.durableRuntime) {
+      const scheduled = await this.durableRuntime.handleNaturalLanguage(text, { userId });
+      if (scheduled) {
+        this.recordDay1Action({
+          source,
+          kind: scheduled.kind,
+          capabilityId: null,
+          success: true,
+          replyPreview: String(scheduled.reply || '').slice(0, 240)
+        });
+        return scheduled;
+      }
+    }
+
     if (this.macgyverEngine) {
       const control = matchObjectiveControl(text);
       if (control) {
@@ -3598,6 +3713,7 @@ class HustleBotServer {
       // Graceful shutdown
       process.on('SIGINT', async () => {
         logger.info('🛑 Received SIGINT, shutting down gracefully...');
+        try { await this.durableRuntime?.shutdown(); } catch (error) { logger.error(`Runtime shutdown: ${error.message}`); }
         if (this.bot) {
           try {
             await this.bot.stop();
@@ -3616,6 +3732,7 @@ class HustleBotServer {
 
       process.on('SIGTERM', async () => {
         logger.info('🛑 Received SIGTERM, shutting down gracefully...');
+        try { await this.durableRuntime?.shutdown(); } catch (error) { logger.error(`Runtime shutdown: ${error.message}`); }
         if (this.bot) {
           try {
             await this.bot.stop();

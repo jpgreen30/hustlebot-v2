@@ -110,17 +110,16 @@ describe('JobQueue', () => {
   test('requeues jobs left running by a crashed process', async () => {
     const redis = new FakeRedis();
 
-    // First process claims the job, then dies mid-run (handler never settles).
-    const crashed = new JobQueue({ redis, pollIntervalMs: 20 });
+    const crashed = new JobQueue({ redis, pollIntervalMs: 20, leaseMs: 80, retryDelay: 10 });
     crashed.registerHandler('slow', () => new Promise(() => {}));
     await crashed.start();
     const id = await crashed.createJob('slow', { n: 1 });
     await waitFor(async () => (await crashed.getJob(id))?.status === JOB_STATUS.RUNNING);
-    clearInterval(crashed.pollTimer); // simulate the process going away
+    clearInterval(crashed.pollTimer);
     crashed.started = false;
+    crashed.abandonInFlightForTest(id);
 
-    // A fresh process boots against the same Redis and recovers the job.
-    const recovered = new JobQueue({ redis, pollIntervalMs: 20 });
+    const recovered = new JobQueue({ redis, pollIntervalMs: 20, leaseMs: 80, retryDelay: 10 });
     const seen = [];
     recovered.registerHandler('slow', async (payload) => {
       seen.push(payload);
@@ -128,7 +127,7 @@ describe('JobQueue', () => {
     });
     await recovered.start();
 
-    await waitFor(async () => (await recovered.getJob(id))?.status === JOB_STATUS.COMPLETED);
+    await waitFor(async () => (await recovered.getJob(id))?.status === JOB_STATUS.COMPLETED, { timeout: 4000 });
     const job = await recovered.getJob(id);
     assert.strictEqual(job.result, 'finished after restart');
     assert.deepStrictEqual(seen, [{ n: 1 }]);
@@ -145,12 +144,16 @@ describe('JobQueue', () => {
     await queue.start();
 
     const id = await queue.createJob('flaky', {}, { maxAttempts: 3 });
-    await waitFor(async () => (await queue.getJob(id))?.status === JOB_STATUS.FAILED, { timeout: 4000 });
+    await waitFor(async () => {
+      const s = (await queue.getJob(id))?.status;
+      return s === JOB_STATUS.FAILED || s === JOB_STATUS.DEAD_LETTER;
+    }, { timeout: 4000 });
 
     const job = await queue.getJob(id);
     assert.strictEqual(calls, 3);
     assert.strictEqual(job.attempts, 3);
     assert.match(job.error, /boom/);
+    assert.ok(job.status === JOB_STATUS.DEAD_LETTER || job.status === JOB_STATUS.FAILED);
     await queue.shutdown();
   });
 
@@ -180,7 +183,10 @@ describe('JobQueue', () => {
     await queue.start();
 
     const id = await queue.createJob('hang', {}, { maxAttempts: 1 });
-    await waitFor(async () => (await queue.getJob(id))?.status === JOB_STATUS.FAILED, { timeout: 4000 });
+    await waitFor(async () => {
+      const s = (await queue.getJob(id))?.status;
+      return s === JOB_STATUS.FAILED || s === JOB_STATUS.DEAD_LETTER;
+    }, { timeout: 4000 });
 
     assert.match((await queue.getJob(id)).error, /timed out/i);
     await queue.shutdown();
@@ -255,7 +261,7 @@ describe('JobQueue', () => {
   });
 
   test('falls back to in-memory storage when Redis is absent', async () => {
-    const queue = new JobQueue({ redisUrl: null, pollIntervalMs: 20 });
+    const queue = new JobQueue({ redisUrl: null, dataDir: null, pollIntervalMs: 20 });
     queue.registerHandler('mem', async () => 'ran');
     await queue.start();
 
@@ -269,4 +275,63 @@ describe('JobQueue', () => {
     assert.ok(stats.handlers.includes('mem'));
     await queue.shutdown();
   });
+
+  test('delayed jobs wait until availableAt', async () => {
+    const queue = new JobQueue({ redis: new FakeRedis(), pollIntervalMs: 20, retryDelay: 10 });
+    const ran = [];
+    queue.registerHandler('later', async (p) => { ran.push(p.n); return 'ok'; });
+    await queue.start();
+    const id = await queue.createJob('later', { n: 1 }, { delayMs: 200 });
+    await new Promise((r) => setTimeout(r, 50));
+    assert.notEqual((await queue.getJob(id)).status, JOB_STATUS.COMPLETED);
+    await waitFor(async () => (await queue.getJob(id))?.status === JOB_STATUS.COMPLETED, { timeout: 4000 });
+    assert.deepStrictEqual(ran, [1]);
+    await queue.shutdown();
+  });
+
+  test('idempotency key returns the existing job', async () => {
+    const queue = new JobQueue({ redis: new FakeRedis(), pollIntervalMs: 10000 });
+    await queue.initialize();
+    const a = await queue.createJob('x', { n: 1 }, { idempotencyKey: 'same' });
+    const b = await queue.createJob('x', { n: 2 }, { idempotencyKey: 'same' });
+    assert.strictEqual(a, b);
+    await queue.shutdown();
+  });
+
+  test('auth failures are not retried', async () => {
+    const queue = new JobQueue({ redis: new FakeRedis(), pollIntervalMs: 20, retryDelay: 10 });
+    let calls = 0;
+    queue.registerHandler('auth', async () => {
+      calls++;
+      const err = new Error('unauthorized invalid api key');
+      err.status = 401;
+      throw err;
+    });
+    await queue.start();
+    const id = await queue.createJob('auth', {}, { maxAttempts: 5 });
+    await waitFor(async () => {
+      const s = (await queue.getJob(id))?.status;
+      return s === JOB_STATUS.FAILED || s === JOB_STATUS.DEAD_LETTER;
+    }, { timeout: 4000 });
+    assert.strictEqual(calls, 1);
+    await queue.shutdown();
+  });
+
+  test('pause keeps a queued job from running until resume', async () => {
+    const queue = new JobQueue({ redis: new FakeRedis(), maxConcurrent: 1, pollIntervalMs: 10000 });
+    let ran = 0;
+    queue.registerHandler('p', async () => { ran++; return 'go'; });
+    await queue.initialize();
+    const id = await queue.createJob('p', {});
+    assert.strictEqual(await queue.pause(id), true);
+    assert.strictEqual((await queue.getJob(id)).status, JOB_STATUS.PAUSED);
+    await queue.start();
+    await new Promise((r) => setTimeout(r, 40));
+    assert.strictEqual(ran, 0);
+    await queue.resume(id);
+    await waitFor(async () => (await queue.getJob(id))?.status === JOB_STATUS.COMPLETED);
+    assert.strictEqual(ran, 1);
+    await queue.shutdown();
+  });
 });
+

@@ -4,6 +4,31 @@
 
 ---
 
+## Entry 00D8: Day-8 durable runtime, scheduler, operational memory
+
+**Date**: 2026-08-20  
+**Decision**: Extend existing JobQueue + filesystem JSON stores. Do not introduce Celery/BullMQ/Temporal/Airflow. Do not install Mem0. Do not make n8n the orchestration brain.
+
+### Redis vs filesystem vs Supabase
+
+- **Redis**: leases, pending/delayed/active coordination, scheduler leader lock (`SET NX EX`), mailbox. Authoritative for multi-instance claim races.
+- **Filesystem** (`src/.data`, gitignored; `HUSTLEBOT_DATA_DIR`): job records when Redis is absent (real process-death tests), event journal JSONL, schedules, operational memory, approval records, n8n effect log. Authoritative for local restart recovery.
+- **Supabase**: unchanged. Users/projects/leads. Not required for Day-8 job/schedule/memory state. No invented schema.
+
+### Mem0
+
+Mem0 remains a historical in-memory stub (`src/features/memory-system.js`). It is **not** the operational source of truth. Day-8 operational memory is file-backed with provenance, confidence, expiry, and an untrusted-write refusal. Mem0 may later be useful for semantic *user* memory, never for jobs, objectives, or schedules.
+
+### n8n
+
+n8n remains a workflow provider/recorder. Scheduler creates MacGyver objectives. MacGyver plans and executes. n8n `execute` honors `idempotencyKey` to avoid duplicate side effects.
+
+### Queue
+
+Existing `JobQueue` gained: file store, leases/heartbeat, delayed `availableAt`, pause/resume, dead-letter, idempotency keys, retry classification, graceful `stopClaiming`.
+
+---
+
 ## Entry 001: Phase 0 Audit Completed
 
 **Date**: 2026-08-14  

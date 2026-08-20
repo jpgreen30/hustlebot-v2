@@ -3,7 +3,9 @@ import { extractProspectsFromPage } from '../acquisition/extract.js';
 import { mapLimit } from './util.js';
 
 const AGGREGATOR_HOST = /(^|\.)(yelp|angi|thumbtack|bbb|mapquest|forbes|bing|google|duckduckgo|homeguide|ontoplist|expertise|yellowpages|superpages|manta|hotfrog)\.com$|(^|\.)(roof\.info)$/i;
-const JUNK_HOST = /(^|\.)(wikipedia\.org|britannica\.com|latimes\.com|nytimes\.com|washingtonpost\.com|cnn\.com|bbc\.com|merriam-webster\.com|spanishdict\.com|dictionary\.cambridge\.org|collinsdictionary\.com|definitions\.net)$/i;
+const JUNK_HOST = /(^|\.)(wikipedia\.org|britannica\.com|latimes\.com|nytimes\.com|washingtonpost\.com|cnn\.com|bbc\.com|merriam-webster\.com|spanishdict\.com|dictionary\.cambridge\.org|collinsdictionary\.com|definitions\.net|wikihow\.com|quora\.com|imdb\.com)$/i;
+const CLINICAL_HOST = /(^|\.)(clevelandclinic\.org|cdc\.gov|mayoclinic\.org|nih\.gov|medlineplus\.gov|webmd\.com|healthline\.com|kidshealth\.org|childmind\.org|apa\.org|who\.int|nhs\.uk)$/i;
+const VIDEO_HOST = /(^|\.)(youtube\.com|youtu\.be|vimeo\.com|dailymotion\.com)$/i;
 const WEAK_QUERY_TOKEN = new Set([
   'angeles', 'california', 'united', 'states', 'companies', 'company', 'business',
   'businesses', 'official', 'website', 'south', 'north', 'west', 'east', 'city',
@@ -18,15 +20,81 @@ function hostOf(url) {
   }
 }
 
+function pathOf(url) {
+  try {
+    return new URL(url).pathname.toLowerCase();
+  } catch {
+    return '';
+  }
+}
+
+export function discoveryIntent(query = '', objective = '') {
+  const blob = `${query} ${objective}`.toLowerCase();
+  const wantCompanies = /(compan|app\b|apps\b|platform|product|startup|vendor|competitor|software|saas|marketplace)/i.test(blob);
+  const wantMedical = /(medical|clinical|treatment|symptom|guideline|diagnosis|disease|health information|cdc|what are the signs)/i.test(blob);
+  return { wantCompanies, wantMedical };
+}
+
 function isAggregator(url) {
   const host = hostOf(url);
   return !host ? false : AGGREGATOR_HOST.test(host);
 }
 
-function isJunkResult(item = {}) {
+function looksLikeArticle(item = {}) {
+  const url = item.url || item.website || '';
+  const title = String(item.title || item.organizationName || item.name || '');
+  const path = pathOf(url);
+  if (/\/(wiki|health\/articles?|health\/diseases|topics?|encyclopedia|learn\/|article\/|news\/)/i.test(path)) return true;
+  if (/:\s*(medlineplus|cleveland clinic|mayo clinic|cdc|wikipedia|britannica)\b/i.test(title)) return true;
+  if (/\b(symptoms|treatment|diagnosis|what is|overview|fact sheet)\b/i.test(title) && CLINICAL_HOST.test(hostOf(url))) return true;
+  if (/^\d+\s+(best|top)\b/i.test(title)) return true;
+  return false;
+}
+
+export function looksLikeCompany(item = {}) {
+  const title = String(item.title || item.organizationName || item.name || '').trim();
+  const snippet = String(item.snippet || item.description || '');
+  const url = item.url || item.website || '';
+  const host = hostOf(url);
+  if (!title) return false;
+  if (looksLikeArticle(item)) return false;
+  if (JUNK_HOST.test(host) || CLINICAL_HOST.test(host) || VIDEO_HOST.test(host)) return false;
+  if (isAggregator(url)) return false;
+  if (/^(best|top|list of|how to)\b/i.test(title)) return false;
+  const productTerms = /\b(app|apps|platform|software|saas|product|marketplace|tracker|network)\b/i.test(`${title} ${snippet} ${host}`);
+  const brandLike = title.split(/\s+/).length <= 6 && !/\b(in |near |review|guide|article)\b/i.test(title);
+  const firstParty = Boolean(host) && title.toLowerCase().split(/\s+/).some((tok) => tok.length > 3 && host.includes(tok.toLowerCase().replace(/[^a-z0-9]/g, '')));
+  return productTerms || firstParty || brandLike;
+}
+
+export function commercialScore(item = {}, intent = {}) {
+  const url = item.url || item.website || '';
+  const host = hostOf(url);
+  let score = 40;
+  if (JUNK_HOST.test(host)) score -= 100;
+  if (VIDEO_HOST.test(host)) score -= 90;
+  if (intent.wantCompanies && !intent.wantMedical && CLINICAL_HOST.test(host)) score -= 80;
+  if (looksLikeArticle(item) && intent.wantCompanies) score -= 50;
+  if (looksLikeCompany(item)) score += 35;
+  if (/\b(app|apps|platform|software|saas)\b/i.test(`${item.title || ''} ${item.snippet || ''}`)) score += 20;
+  const name = String(item.title || item.organizationName || '');
+  if (host && name) {
+    const token = name.toLowerCase().split(/\s+/).find((t) => t.length > 3);
+    if (token && host.includes(token.replace(/[^a-z0-9]/g, ''))) score += 25;
+  }
+  if (/apps\.apple\.com|play\.google\.com|producthunt\.com/i.test(url)) score += 30;
+  return score;
+}
+
+export function isJunkResult(item = {}, intent = {}) {
   const url = item.url || item.website || '';
   const title = item.title || item.organizationName || item.name || '';
-  return JUNK_HOST.test(hostOf(url)) || /wikipedia|britannica|dictionary/i.test(title);
+  const host = hostOf(url);
+  if (JUNK_HOST.test(host) || /wikipedia|britannica|dictionary/i.test(title)) return true;
+  if (VIDEO_HOST.test(host)) return true;
+  if (intent.wantCompanies && !intent.wantMedical && CLINICAL_HOST.test(host)) return true;
+  if (intent.wantCompanies && !intent.wantMedical && looksLikeArticle(item) && !looksLikeDirectory(item)) return true;
+  return false;
 }
 
 function looksLikeDirectory(item = {}) {
@@ -44,7 +112,7 @@ function queryTokens(query) {
 
 function matchesQuery(item, query) {
   const tokens = queryTokens(query).filter((token) => !WEAK_QUERY_TOKEN.has(token));
-  if (!tokens.length) return !isJunkResult(item);
+  if (!tokens.length) return !isJunkResult(item, discoveryIntent(query));
   const hay = `${item.title || ''} ${item.url || ''} ${item.snippet || ''}`.toLowerCase();
   return tokens.some((token) => hay.includes(token));
 }
@@ -82,7 +150,7 @@ function toProspect(record, sourceUrl, provider) {
   const name = record.organizationName || record.name || record.title || null;
   const website = normalizeUrl(record.website || record.url || record.link || null);
   if (!name && !website) return null;
-  if (isJunkResult({ url: website || sourceUrl, title: name })) return null;
+  if (isJunkResult({ url: website || sourceUrl, title: name }, discoveryIntent(name))) return null;
   return {
     organizationName: name || website,
     website,
@@ -179,6 +247,7 @@ export class OrgDiscovery {
     const max = Math.min(Number(input.maxOrganizations || input.limit || 10), 12);
     const sourceUrl = input.sourceUrl || input.url || null;
     const query = input.query || input.objective || null;
+    const intent = discoveryIntent(query, input.objective || input.rawRequest || '');
     const forceDown = new Set(context.forceUnavailable || input.forceUnavailable || []);
     const errors = [];
     const providers = [];
@@ -232,22 +301,32 @@ export class OrgDiscovery {
       const searched = await this.search.search(query, { limit: Math.max(max, 12) });
       providers.push(searched.provider || 'web-search');
       if (searched.status === 'ok' && searched.results?.length) {
-        const pool = searched.results.filter((item) => matchesQuery(item, query) && !isJunkResult(item));
+        const pool = searched.results.filter((item) => matchesQuery(item, query) && !isJunkResult(item, intent));
         const direct = [];
         const directories = [];
         for (const item of pool) {
-          if (looksLikeDirectory(item)) directories.push(item);
+          if (looksLikeDirectory(item) && !looksLikeCompany(item)) directories.push(item);
           else {
             const prospect = toProspect(item, item.url, searched.provider);
-            if (prospect && !isAggregator(prospect.website)) direct.push(prospect);
+            if (prospect && !isAggregator(prospect.website) && !isJunkResult(prospect, intent)) {
+              prospect._score = commercialScore(item, intent);
+              direct.push(prospect);
+            }
           }
         }
+        direct.sort((a, b) => (b._score || 0) - (a._score || 0));
         directories.sort((a, b) => scrapePriority(b) - scrapePriority(a));
         const extracted = await this.extractFromUrls(
           directories.map((item) => item.url).slice(0, 3),
           { max, providers, errors, forceDown }
         );
-        const prospects = mergeProspects([...extracted, ...direct], max);
+        const rankedExtracted = extracted.filter((p) => !isJunkResult(p, intent));
+        const prospects = mergeProspects([...direct, ...rankedExtracted], max)
+          .map((p) => {
+            const copy = { ...p };
+            delete copy._score;
+            return copy;
+          });
         if (prospects.length) {
           return {
             status: 'ok',

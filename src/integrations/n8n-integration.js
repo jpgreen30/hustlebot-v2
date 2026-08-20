@@ -40,6 +40,7 @@ class N8NIntegration {
     this.retryAttempts = 3;
     this.retryDelay = 1000;
     this.webhookHistory = [];
+    this.effectLog = new Map();
 
     // Workflow registry: alias → webhook URL/configuration
     this.workflows = new Map();
@@ -215,6 +216,10 @@ class N8NIntegration {
    */
   async execute(alias, payload = {}) {
     try {
+      const key = payload.idempotencyKey;
+      if (key && this.effectLog.has(key)) {
+        return { ...this.effectLog.get(key), idempotentReplay: true, duplicate: false };
+      }
       const workflow = this.workflows.get(alias);
 
       if (!workflow) {
@@ -311,7 +316,7 @@ class N8NIntegration {
         logger.warn(`n8n workflow '${alias}' accepted but returned no execution id`);
       }
 
-      return {
+      const result = {
         alias,
         status: 'executed',
         executionId: providerExecutionId,
@@ -320,8 +325,11 @@ class N8NIntegration {
         message: Array.isArray(providerBody)
           ? providerBody[0]?.message
           : providerBody?.message,
-        timestamp: new Date()
+        timestamp: new Date(),
+        idempotencyKey: payload.idempotencyKey || null
       };
+      if (payload.idempotencyKey) this.effectLog.set(payload.idempotencyKey, result);
+      return result;
     } catch (error) {
       logger.error(`Workflow execution failed: ${error.message}`);
       return {

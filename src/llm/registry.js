@@ -19,7 +19,13 @@ const DEFAULT_MODELS = [
     modelId: 'deepseek/deepseek-chat',
     provider: 'openrouter',
     enabled: true,
-    taskClasses: [TASK_CLASS.CLASSIFICATION, TASK_CLASS.EXTRACTION, TASK_CLASS.SUMMARIZATION, TASK_CLASS.CHAT],
+    taskClasses: [
+      TASK_CLASS.CLASSIFICATION,
+      TASK_CLASS.EXTRACTION,
+      TASK_CLASS.SUMMARIZATION,
+      TASK_CLASS.CHAT,
+      TASK_CLASS.REASONING
+    ],
     contextWindow: 64000,
     structuredOutput: true,
     relativeCost: 1,
@@ -31,7 +37,13 @@ const DEFAULT_MODELS = [
     modelId: 'x-ai/grok-4.5',
     provider: 'openrouter',
     enabled: true,
-    taskClasses: [TASK_CLASS.CHAT, TASK_CLASS.SUMMARIZATION, TASK_CLASS.PLANNING, TASK_CLASS.RECOVERY],
+    taskClasses: [
+      TASK_CLASS.CHAT,
+      TASK_CLASS.SUMMARIZATION,
+      TASK_CLASS.PLANNING,
+      TASK_CLASS.RECOVERY,
+      TASK_CLASS.REASONING
+    ],
     contextWindow: 128000,
     structuredOutput: true,
     relativeCost: 3,
@@ -55,7 +67,13 @@ const DEFAULT_MODELS = [
     modelId: 'google/gemini-2.0-flash',
     provider: 'openrouter',
     enabled: true,
-    taskClasses: [TASK_CLASS.CLASSIFICATION, TASK_CLASS.EXTRACTION, TASK_CLASS.CHAT],
+    taskClasses: [
+      TASK_CLASS.CLASSIFICATION,
+      TASK_CLASS.EXTRACTION,
+      TASK_CLASS.CHAT,
+      TASK_CLASS.REASONING,
+      TASK_CLASS.SUMMARIZATION
+    ],
     contextWindow: 1000000,
     structuredOutput: true,
     relativeCost: 1,
