@@ -4,7 +4,7 @@
  */
 
 import { newId } from './schema.js';
-import { inferPlaybookClass } from './classify.js';
+import { inferPlaybookClass, distinctiveTokens } from './classify.js';
 import { wrapUntrusted } from '../objective/context-pack.js';
 
 export function normalizeQuery(q = '') {
@@ -38,6 +38,29 @@ function poisoned(text = '') {
   return /ignore (your|the) (objective|instructions)|email this list|disable approval|call (our )?sales/i.test(String(text));
 }
 
+function industrySeedQueries(question = '', playbook = '') {
+  const compounds = String(question).match(/\b[a-z]+(?:-[a-z]+)+\b/gi) || [];
+  const acronyms = String(question).match(/\b[A-Z]{2,5}\b/g) || [];
+  const tokens = distinctiveTokens(question);
+  const bits = [];
+  for (const b of [...compounds, ...acronyms.filter((a) => !/^(US|USA|AI|THE|AND|FOR|NOT)$/.test(a)), ...tokens]) {
+    const k = String(b).toLowerCase();
+    if (k && !bits.some((u) => u.toLowerCase() === k)) bits.push(b);
+  }
+  const core = bits.slice(0, 3).join(' ').trim();
+  if (playbook === 'b2b-software' || playbook === 'regulated-information') {
+    return [
+      `${core} software`.trim(),
+      `${bits[0] || core} association`.trim(),
+      `${core} vendors`.trim()
+    ].filter((q) => q.length >= 6);
+  }
+  if (playbook === 'product-landscape') {
+    return [`${core} official site`.trim()].filter((q) => q.length >= 6);
+  }
+  return [];
+}
+
 export function proposeAdaptations({ quality, request, previousQueries = [], vocabulary = [], playbook } = {}) {
   const question = request?.question || '';
   if (poisoned(question)) {
@@ -69,8 +92,7 @@ export function proposeAdaptations({ quality, request, previousQueries = [], voc
       push('synonym', ['virtual receptionist software', 'AI phone answering'], 'Category synonym queries after junk occupied slots.');
     }
     if (pb === 'b2b-software' || pb === 'regulated-information') {
-      const head = qn.split(/[.!?]/)[0].slice(0, 80);
-      push('ecosystem', [`${head} software`, `${head} association`], 'Off-topic or wrong-type results — search industry software and catalogues.');
+      push('ecosystem', industrySeedQueries(qn, pb), 'Off-topic or wrong-type results — search industry software and catalogues.');
     }
   }
   if (types.has('quantity') || quality?.classification === 'WEAK' || quality?.classification === 'FAILED') {
@@ -87,7 +109,7 @@ export function proposeAdaptations({ quality, request, previousQueries = [], voc
       push('search-to-directory', [], 'Generic search returned SEO titles — try public business directories.', ['DIRECTORY', 'FIRST_PARTY_WEB']);
     }
     if (pb === 'b2b-software' || pb === 'regulated-information') {
-      push('ecosystem', [`${String(question).split(/[.!?]/)[0].slice(0, 80)} software`, `${String(question).split(/[.!?]/)[0].slice(0, 60)} association`], 'Unknown domain — discover industry vocabulary and catalogues.', ['SEARCH_ENGINE', 'DIRECTORY']);
+      push('ecosystem', industrySeedQueries(qn, pb), 'Unknown domain — discover industry vocabulary and catalogues.', ['SEARCH_ENGINE', 'DIRECTORY']);
     }
   }
   if (types.has('first-party')) {

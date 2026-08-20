@@ -158,6 +158,19 @@ describe('Day-10 adaptation + novelty', () => {
     assert.ok(!/weave|pearl|ruby receptionist/i.test(blob));
   });
 
+  test('FOG adaptations use industry compounds not truncated prose', () => {
+    const q = 'Research the competitive landscape for software and technology used by commercial grease-trap and FOG maintenance service companies in the United States.';
+    const ads = proposeAdaptations({
+      quality: { classification: 'FAILED', weaknesses: [{ type: 'quantity' }, { type: 'relevance' }] },
+      request: { question: q },
+      previousQueries: []
+    });
+    const blob = JSON.stringify(ads);
+    assert.ok(/grease-trap|FOG/i.test(blob));
+    assert.ok(!/commercia software/i.test(blob));
+    assert.ok(!/weave|pearl|ruby|zurn|schier/i.test(blob));
+  });
+
   test('page instructions cannot become an adaptation', () => {
     const ads = proposeAdaptations({
       quality: { classification: 'WEAK', weaknesses: [{ type: 'quantity' }] },
