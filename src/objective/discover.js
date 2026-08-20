@@ -122,15 +122,46 @@ export class OrgDiscovery {
   async extractFromUrls(urls, { max, providers, errors, forceDown }) {
     const extracted = [];
     const canSpider = this.spider?.scrape && !forceDown.has('custom-spider') && !forceDown.has('spider');
-    if (!canSpider) return extracted;
+    const canBrowser = this.browser?.render && !forceDown.has('browser');
     for (const url of urls) {
       if (!url || extracted.length >= max) break;
-      const page = await this.spider.scrape(url, { timeout: 15000 });
-      providers.push(page.provider || 'custom-spider');
-      if (page.status !== 'ok') {
-        errors.push({ provider: 'custom-spider', error: page.error || page.status, url });
-        continue;
+      let page = null;
+      if (canSpider) {
+        page = await this.spider.scrape(url, { timeout: 15000 });
+        providers.push(page.provider || 'custom-spider');
+        if (page.status !== 'ok') {
+          errors.push({ provider: 'custom-spider', error: page.error || page.status, url });
+          page = null;
+        }
       }
+      if (!page && canBrowser) {
+        const rendered = await this.browser.render(url, {
+          waitFor: 2500,
+          forceUnavailable: [...forceDown]
+        });
+        providers.push(rendered.provider || 'browser-render');
+        if (rendered.status === 'ok' && rendered.records?.length) {
+          for (const record of rendered.records) {
+            const prospect = toProspect(record, url, rendered.provider);
+            if (prospect) extracted.push(prospect);
+          }
+          continue;
+        }
+        if (rendered.status === 'ok' && rendered.html) {
+          page = {
+            status: 'ok',
+            provider: rendered.provider || 'browser-render',
+            url,
+            finalUrl: url,
+            html: rendered.html,
+            markdown: rendered.markdown || '',
+            metadata: { title: rendered.evidence?.title || null }
+          };
+        } else {
+          errors.push({ provider: rendered.provider || 'browser-render', error: rendered.error || rendered.status, url });
+        }
+      }
+      if (!page || page.status !== 'ok') continue;
       const found = extractProspectsFromPage({
         ...page,
         url: page.finalUrl || url,

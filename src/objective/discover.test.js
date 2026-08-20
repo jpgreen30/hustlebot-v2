@@ -101,4 +101,32 @@ describe('OrgDiscovery search-shaped routing', () => {
     assert.ok(!names.some((n) => /wikipedia|britannica|times/i.test(n)));
     assert.match(out.reasonSelected, /public business directory|directory pages/i);
   });
+
+  test('spider 403 falls back to browser/firecrawl html extraction', async () => {
+    const discovery = new OrgDiscovery({
+      search: {
+        search: async () => ({ status: 'failed', provider: 'bing', results: [], error: 'empty' })
+      },
+      spider: {
+        scrape: async () => ({ status: 'failed', provider: 'custom-spider', error: 'HTTP 403' })
+      },
+      browser: {
+        render: async (url) => ({
+          status: 'ok',
+          provider: 'firecrawl',
+          url,
+          html: '<a class="business-name" href="/mip/lang-roofing-inc">Lang Roofing Inc</a><a class="business-name" href="/mip/sunset-roof">Sunset Roofing</a>'
+        })
+      }
+    });
+    const out = await discovery.discover({
+      query: 'Los Angeles roofing companies',
+      location: 'Los Angeles',
+      industry: 'roofing',
+      maxOrganizations: 5
+    });
+    assert.equal(out.status, 'ok');
+    assert.ok(out.prospects.some((p) => p.organizationName === 'Lang Roofing Inc'));
+    assert.ok(out.providers.includes('firecrawl') || out.providers.includes('browser-render'));
+  });
 });
