@@ -4,10 +4,15 @@ export const ENTITY_TYPE = {
   ORGANIZATION: 'ORGANIZATION',
   PERSON: 'PERSON',
   PRODUCT: 'PRODUCT',
+  APP: 'APP',
   WEBSITE: 'WEBSITE',
   LOCATION: 'LOCATION',
   EVENT: 'EVENT',
-  OFFER: 'OFFER'
+  OFFER: 'OFFER',
+  DIRECTORY: 'DIRECTORY',
+  ARTICLE: 'ARTICLE',
+  ASSOCIATION: 'ASSOCIATION',
+  PUBLICATION: 'PUBLICATION'
 };
 
 export const SOURCE_KIND = {
@@ -115,6 +120,37 @@ export function createIntelligenceRequest(input = {}) {
     createdAt: input.createdAt || new Date().toISOString()
   };
 }
+
+export const QUALITY_CLASS = {
+  STRONG: 'STRONG',
+  ACCEPTABLE: 'ACCEPTABLE',
+  WEAK: 'WEAK',
+  FAILED: 'FAILED'
+};
+
+export const CLAIM_CURRENCY = {
+  CURRENT: 'CURRENT',
+  HISTORICAL: 'HISTORICAL',
+  SUPERSEDED: 'SUPERSEDED'
+};
+
+export const EMPTY_METRICS = {
+  researchRuns: 0,
+  queriesIssued: 0,
+  sourcesAttempted: 0,
+  sourcesUsed: 0,
+  sourceFailures: 0,
+  entitiesDiscovered: 0,
+  entitiesAccepted: 0,
+  entitiesRejected: 0,
+  entityMerges: 0,
+  entityMergeRefusals: 0,
+  claimsCreated: 0,
+  evidenceCreated: 0,
+  conflictsDetected: 0,
+  adaptationsTriggered: 0,
+  cacheHits: 0
+};
 
 export function fingerprintText(value = '') {
   return String(value)

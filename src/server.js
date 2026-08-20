@@ -777,8 +777,10 @@ class HustleBotServer {
           this.intelStore = new IntelStore({
             dir: join(HUSTLEBOT_DATA_DIR, 'intel'),
             redis: this.mailbox?.redis || null,
-            supabase: this.db?.client || null
+            supabase: this.db?.client || null,
+            production: true
           });
+          await this.intelStore.probeSupabase();
           this.sourceRegistry = new SourceRegistry({ store: this.intelStore, fabric: this.toolFabric });
           this.intelFabric = new IntelligenceFabric({
             store: this.intelStore,
@@ -2309,6 +2311,24 @@ class HustleBotServer {
         logger.error(`Intel control error: ${error.message}`);
         res.status(500).json({ error: error.message });
       }
+    });
+
+    this.app.get('/day10', (req, res) => {
+      const stats = this.intelStore?.snapshot?.() || {};
+      const dur = this.intelStore?.durability || {};
+      const email = this.outreachEmail?.isAvailable?.() ? 'configured' : 'UNAVAILABLE';
+      res.type('html').send(`<!doctype html>
+<html><head><meta charset="utf-8"><title>HustleBot Day-10</title>
+<style>body{font-family:ui-sans-serif,system-ui;background:#0f1419;color:#e7ecf1;margin:0;padding:32px;max-width:1040px}h1{margin:0 0 8px}code,pre{background:#1b232c;padding:12px;border-radius:8px;display:block;overflow:auto} .ok{color:#7dce82}.bad{color:#ff8b8b}</style>
+</head><body>
+<h1>HustleBot Day-10 Research Quality Engine</h1>
+<p>Adaptive discovery, quality gate, knowledge consolidation. MacGyver remains the brain. Supabase is the durable SoT. Mem0 is not.</p>
+<p>Email: <span class="${email === 'configured' ? 'ok' : 'bad'}">${email}</span>
+ · Fabric: <span class="${this.intelFabric ? 'ok' : 'bad'}">${this.intelFabric ? 'ready' : 'UNAVAILABLE'}</span>
+ · Supabase intel: <span class="${dur.supabase === 'HEALTHY' ? 'ok' : 'bad'}">${dur.supabase || 'unknown'}</span></p>
+<h2>Stats</h2>
+<pre>${JSON.stringify(stats, null, 2)}</pre>
+</body></html>`);
     });
 
     this.app.get('/day9', (req, res) => {

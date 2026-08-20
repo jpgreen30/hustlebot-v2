@@ -7,11 +7,16 @@ import { looksLikeCompany, isJunkResult, discoveryIntent, commercialScore, onTop
 import { wrapUntrusted } from '../objective/context-pack.js';
 import { extractSlices } from '../objective/quantities.js';
 import {
-  createIntelligenceRequest, CLAIM_STATUS, TRUST_CLASS, EVIDENCE_BUDGET, INTEL_INTENT, SOURCE_KIND
+  createIntelligenceRequest, CLAIM_STATUS, TRUST_CLASS, EVIDENCE_BUDGET, INTEL_INTENT, SOURCE_KIND, newId
 } from './schema.js';
 import { planSearchQueries, recordQueryHit } from './queries.js';
 import { SourceRegistry } from './sources.js';
 import { EvidenceGraph } from './graph.js';
+import { classifySearchResult, RESULT_ROLE, inferPlaybookClass } from './classify.js';
+import { evaluateResearch, rankingComponents, QUALITY } from './quality.js';
+import { proposeAdaptations, extractVocabulary, isNovelQuery, normalizeQuery } from './adapt.js';
+import { matchPlaybook, recordPlaybookOutcome, shouldTrustObservation } from './playbook.js';
+import { preferredDisplayName } from './names.js';
 
 function firstParty(url, domain) {
   try {
@@ -64,98 +69,177 @@ export class IntelligenceFabric {
     return this.store?.snapshot?.() || {};
   }
 
-  stopReason(findings, request, startedAt) {
+  stopReason(findings, request, startedAt, budget = {}) {
     const need = Number(request.quantity || 10);
-    const unique = new Set(findings.map((f) => (f.domain || f.name || '').toLowerCase()));
+    const unique = new Set(findings.map((f) => (f.domain || f.entity?.domain || f.name || '').toLowerCase()));
     if (unique.size >= need) return 'requested quantity reached';
-    if (Date.now() - startedAt > 90000) return 'time budget';
+    const maxMs = Number(budget.maxDurationMs || request.maxDurationMs || 90000);
+    if (Date.now() - startedAt > maxMs) return 'time budget';
     const last = findings.slice(-3);
-    if (findings.length >= 6 && last.every((f) => unique.has((f.domain || '').toLowerCase()))) {
+    if (findings.length >= 6 && last.every((f) => unique.has((f.domain || f.entity?.domain || '').toLowerCase()))) {
       return 'diminishing unique entities';
     }
     return null;
   }
 
+  filterMemory(memory, question) {
+    const playbook = inferPlaybookClass(question);
+    return (memory || []).filter((m) => {
+      const content = String(m.content || '');
+      if (/ignore (your|the) (objective|instructions)|disable approvalgate/i.test(content)) return false;
+      if (playbook === 'product-landscape' && /wikipedia/i.test(content) && /always works|for all product/i.test(content)) {
+        return false;
+      }
+      return true;
+    });
+  }
+
+  async considerItem(item, meta, buckets) {
+    const question = meta.request?.question || '';
+    const classified = classifySearchResult(item, question);
+    this.store?.bump?.('entitiesDiscovered');
+    if (classified.role === RESULT_ROLE.REJECT) {
+      buckets.rejected.push({ ...item, classification: classified, reason: classified.reasons.join(',') });
+      this.store?.bump?.('entitiesRejected');
+      return null;
+    }
+    if (classified.role === RESULT_ROLE.SOURCE) {
+      buckets.sources.push({ ...item, classification: classified });
+      buckets.rejected.push({ ...item, classification: classified, reason: classified.reasons.join(',') });
+      this.store?.bump?.('entitiesRejected');
+      if (item.url || item.website) {
+        await this.graph.addEvidence({
+          objectiveId: meta.request?.objectiveId,
+          sourceUrl: item.url || item.website,
+          excerpt: item.snippet || item.title || classified.pageKind,
+          trustClass: TRUST_CLASS.DIRECTORY,
+          query: meta.query,
+          provider: meta.provider,
+          sourceType: classified.pageKind
+        });
+      }
+      return null;
+    }
+    const ingested = await this.ingestProspect({
+      organizationName: item.title || item.organizationName || item.name,
+      website: item.url || item.website,
+      description: item.snippet || item.description,
+      sourceUrl: item.url || item.website,
+      title: item.title,
+      jsonLdName: item.jsonLdName,
+      ogSiteName: item.ogSiteName
+    }, { ...meta, pageKind: classified.pageKind });
+    if (ingested) {
+      ingested.classification = classified;
+      ingested.firstParty = ingested.evidence?.trustClass === TRUST_CLASS.FIRST_PARTY;
+      buckets.accepted.push(ingested);
+      this.store?.bump?.('entitiesAccepted');
+    }
+    return ingested;
+  }
+
   async research(input = {}, context = {}) {
     const request = createIntelligenceRequest(input);
+    request.maxQueries = Number(input.maxQueries || request.maxQueries || 8);
+    request.maxAdaptations = Number(input.maxAdaptations ?? 2);
+    request.maxDurationMs = Number(input.maxDurationMs || 90000);
     await this.store?.put?.('requests', { ...request, id: request.intelligenceRequestId });
+    this.store?.bump?.('researchRuns');
     const overlay = this.fabric?.healthOverlay?.() || context.healthOverlay || {};
-    const memory = this.operationalMemory?.recall?.({ query: request.question, limit: 5 }) || [];
+    const rawMemory = this.operationalMemory?.recall?.({ query: request.question, limit: 5 }) || [];
+    const memory = this.filterMemory(rawMemory, request.question);
     const selected = this.sources.select(request, {
       healthOverlay: overlay,
       memory,
       forceUnavailable: context.forceUnavailable || []
     });
     const hints = discoveryHints(request, input);
-    const queries = planSearchQueries({
+    const playbook = matchPlaybook(request.question);
+    let queries = planSearchQueries({
       ...request,
       slices: hints.slices,
       geography: hints.geography,
-      query: request.question
+      query: input.query || request.question
     });
     const startedAt = Date.now();
     const findings = [];
+    const buckets = { accepted: [], rejected: [], sources: [] };
     const errors = [];
     const sourcesUsed = [];
+    const sourcesAttempted = [];
+    const adaptations = [];
     const down = new Set(context.forceUnavailable || []);
+    const vocabulary = [];
+    let quality = null;
 
     const searchers = selected.filter((s) => s.sourceType === SOURCE_KIND.SEARCH_ENGINE && !down.has(s.provider));
     const searcher = searchers[0];
     if (down.size && !searcher) {
       const failed = [...down][0];
       errors.push({ provider: failed, error: 'preferred search unavailable', kind: 'PROVIDER_FAILURE' });
-      if (this.store?.stats) this.store.stats.sourceFailures += 1;
+      this.store?.bump?.('sourceFailures');
     }
 
-    if (searcher && this.search?.search) {
-      for (const planned of queries) {
-        const halt = this.stopReason(findings, request, startedAt);
+    const runQueries = async (plannedList) => {
+      if (!searcher || !this.search?.search) return;
+      for (const planned of plannedList) {
+        const halt = this.stopReason(findings, request, startedAt, { maxDurationMs: request.maxDurationMs });
         if (halt) {
           request.stopReason = halt;
           break;
         }
+        this.store?.bump?.('queriesIssued');
+        sourcesAttempted.push(searcher.provider);
         let searched;
         try {
           searched = await this.search.search(planned.query, { limit: Math.max(request.quantity, 10) });
         } catch (error) {
           errors.push({ provider: searcher.provider, error: error.message, kind: 'TRANSIENT' });
-          if (this.store?.stats) this.store.stats.sourceFailures += 1;
+          this.store?.bump?.('sourceFailures');
           continue;
         }
-        sourcesUsed.push(searched.provider || searcher.provider);
         if (searched.status !== 'ok' || !searched.results?.length) {
           errors.push({
             provider: searched.provider || searcher.provider,
             error: searched.error || 'zero results',
             kind: /challenge|captcha/i.test(String(searched.error || '')) ? 'PROVIDER_PROTOCOL' : 'EMPTY'
           });
-          if (this.store?.stats) this.store.stats.sourceFailures += 1;
+          this.store?.bump?.('sourceFailures');
           continue;
         }
+        sourcesUsed.push(searched.provider || searcher.provider);
+        this.store?.bump?.('sourcesUsed');
         const intent = discoveryIntent(planned.query, request.question);
+        vocabulary.push(...extractVocabulary((searched.results || []).map((r) => r.snippet), request.question));
+        let acceptedThis = 0;
         for (const item of searched.results) {
-          if (isJunkResult(item, intent) && !looksLikeCompany(item)) continue;
-          if (!looksLikeCompany(item)) continue;
-          if (!onTopic(item, planned.query, intent) && !onTopic(item, request.question, intent)) continue;
-          const ingested = await this.ingestProspect({
-            organizationName: item.title || item.organizationName,
-            website: item.url,
-            description: item.snippet,
-            sourceUrl: item.url
-          }, {
+          if (isJunkResult(item, intent) && classifySearchResult(item, request.question).role !== RESULT_ROLE.CANDIDATE) {
+            buckets.rejected.push({ ...item, reason: 'junk' });
+            continue;
+          }
+          if (!onTopic(item, planned.query, intent) && !onTopic(item, request.question, intent)
+            && classifySearchResult(item, request.question).role === RESULT_ROLE.CANDIDATE) {
+            continue;
+          }
+          const ingested = await this.considerItem(item, {
             request,
             query: planned.query,
             provider: searched.provider,
             sourceUrl: item.url,
             snippet: item.snippet
-          });
+          }, buckets);
           if (ingested) {
             findings.push(ingested);
+            acceptedThis += 1;
             recordQueryHit(queries, planned.query, [ingested.evidenceId]);
           }
         }
+        planned.acceptedEntityYield = acceptedThis;
+        planned.noiseRatio = searched.results.length ? (searched.results.length - acceptedThis) / searched.results.length : 1;
       }
-    }
+    };
+
+    await runQueries(queries);
 
     if (!findings.length && this.discovery?.discover) {
       const fallback = await this.discovery.discover({
@@ -166,13 +250,19 @@ export class IntelligenceFabric {
         industry: hints.industry,
         slices: hints.slices
       }, context);
+      this.store?.bump?.('sourcesAttempted');
       for (const p of fallback.prospects || []) {
-        findings.push(await this.ingestProspect(p, {
+        const ingested = await this.considerItem({
+          title: p.organizationName || p.name,
+          url: p.website || p.url,
+          snippet: p.description
+        }, {
           request,
           query: request.question,
           provider: (fallback.providers || [])[0],
           sourceUrl: p.sourceUrl || p.website
-        }));
+        }, buckets);
+        if (ingested) findings.push(ingested);
       }
       sourcesUsed.push(...(fallback.providers || []));
       if (errors.length) {
@@ -184,22 +274,151 @@ export class IntelligenceFabric {
       }
     }
 
-    const unique = [];
-    const seen = new Set();
-    for (const row of findings.filter(Boolean)) {
-      const key = (row.entity?.domain || row.entity?.name || '').toLowerCase();
-      if (!key || seen.has(key)) continue;
-      seen.add(key);
-      unique.push(row);
+    const uniqueRows = () => {
+      const unique = [];
+      const seen = new Set();
+      for (const row of findings.filter(Boolean)) {
+        const key = (row.entity?.domain || row.entity?.name || '').toLowerCase();
+        if (!key || seen.has(key)) continue;
+        seen.add(key);
+        unique.push(row);
+      }
+      return unique;
+    };
+
+    let unique = uniqueRows();
+    quality = evaluateResearch({
+      question: request.question,
+      requested: request.quantity,
+      accepted: unique.map((u) => ({
+        ...u.entity,
+        organizationName: u.entity.name,
+        website: u.entity.website,
+        firstParty: u.firstParty,
+        evidenceIds: u.evidenceIds,
+        pageKind: u.classification?.pageKind
+      })),
+      rejected: buckets.rejected,
+      evidence: unique.flatMap((u) => [u.evidence].filter(Boolean)),
+      geography: hints.geography,
+      conflicts: this.store?.stats?.conflictsDetected || 0
+    });
+
+    let adaptationPasses = 0;
+    while (
+      (quality.classification === QUALITY.WEAK || quality.classification === QUALITY.FAILED)
+      && adaptationPasses < request.maxAdaptations
+      && Date.now() - startedAt < request.maxDurationMs
+    ) {
+      const proposed = proposeAdaptations({
+        quality,
+        request,
+        previousQueries: queries,
+        vocabulary,
+        playbook: playbook.class
+      });
+      if (!proposed.length) break;
+      adaptationPasses += 1;
+      this.store?.bump?.('adaptationsTriggered');
+      const chosen = proposed[0];
+      const extraQueries = (chosen.queries || [])
+        .filter((q) => isNovelQuery(q, queries))
+        .map((q) => ({ query: q, reason: chosen.why, producedEvidence: [] }));
+      if (!extraQueries.length && !(chosen.sourceTypes || []).includes('DIRECTORY')) break;
+      queries.push(...extraQueries);
+      adaptations.push({
+        ...chosen,
+        objectiveId: request.objectiveId,
+        qualityBefore: quality.classification,
+        at: new Date().toISOString()
+      });
+      await this.store?.put?.('adaptations', adaptations[adaptations.length - 1]);
+      if (extraQueries.length) await runQueries(extraQueries);
+      if (!extraQueries.length && this.discovery?.discover && (chosen.sourceTypes || []).includes('DIRECTORY')) {
+        const fallback = await this.discovery.discover({
+          query: request.question,
+          maxOrganizations: request.quantity,
+          location: hints.geography,
+          industry: hints.industry
+        }, context);
+        for (const p of fallback.prospects || []) {
+          const ingested = await this.considerItem({
+            title: p.organizationName, url: p.website, snippet: p.description
+          }, { request, query: request.question, provider: (fallback.providers || [])[0] }, buckets);
+          if (ingested) findings.push(ingested);
+        }
+      }
+      unique = uniqueRows();
+      const after = evaluateResearch({
+        question: request.question,
+        requested: request.quantity,
+        accepted: unique.map((u) => ({
+          ...u.entity,
+          organizationName: u.entity.name,
+          website: u.entity.website,
+          firstParty: u.firstParty,
+          evidenceIds: u.evidenceIds,
+          pageKind: u.classification?.pageKind
+        })),
+        rejected: buckets.rejected,
+        geography: hints.geography
+      });
+      adaptations[adaptations.length - 1].qualityAfter = after.classification;
+      quality = after;
+      if (quality.classification === QUALITY.STRONG || quality.classification === QUALITY.ACCEPTABLE) break;
+      if (request.stopReason === 'diminishing unique entities') break;
     }
 
+    unique = uniqueRows();
     const top = unique.slice(0, request.quantity);
-    const gaps = [];
-    if (top.length < request.quantity) {
+    const gaps = quality.gaps?.length ? quality.gaps : [];
+    if (top.length < request.quantity && !gaps.length) {
       gaps.push({
         type: 'quantity',
+        requested: request.quantity,
+        legitimateFound: top.length,
+        gap: request.quantity - top.length,
+        reason: request.stopReason || 'insufficient evidence',
         detail: `Requested ${request.quantity}, found ${top.length} legitimate entities. Not padded with junk.`
       });
+    }
+
+    const ranking = top.map((t, i) => ({
+      rank: i + 1,
+      ...rankingComponents(t.entity, request.question, {
+        firstParty: t.firstParty,
+        geography: hints.geography
+      })
+    }));
+
+    recordPlaybookOutcome(this.store, playbook, {
+      acceptedYield: top.length / Math.max(request.quantity, 1),
+      noiseRatio: quality.dimensions?.noiseRatio,
+      quality: quality.classification
+    });
+
+    const run = {
+      runId: newId('run'),
+      objectiveId: request.objectiveId,
+      intelligenceRequestId: request.intelligenceRequestId,
+      playbook: playbook.class,
+      quality: quality.classification,
+      dimensions: quality.dimensions,
+      adaptations,
+      queries: queries.map((q) => q.query),
+      sourcesUsed: [...new Set(sourcesUsed)],
+      accepted: top.length,
+      rejected: buckets.rejected.length,
+      vocabulary: vocabulary.slice(0, 8),
+      contacted: false,
+      createdAt: new Date().toISOString()
+    };
+    await this.store?.put?.('runs', run);
+    await this.store?.persistMetrics?.();
+
+    const unknowns = [];
+    if (!top.some((t) => /price|pricing|\$\d/i.test(t.entity.description || ''))) {
+      unknowns.push({ predicate: 'pricing', status: 'OBSERVED_NOT_FOUND' });
     }
 
     return {
@@ -208,22 +427,35 @@ export class IntelligenceFabric {
       queries,
       sourcesSelected: selected.map((s) => ({ sourceId: s.sourceId, provider: s.provider, reasonSelected: s.reasonSelected })),
       sourcesUsed: [...new Set(sourcesUsed)],
+      sourcesAttempted: [...new Set(sourcesAttempted)],
       entities: top.map((t) => t.entity),
       claims: top.flatMap((t) => t.claims || []),
       evidence: top.flatMap((t) => t.evidence || []),
       prospects: top.map((t) => ({
-        organizationName: t.entity.name,
+        organizationName: t.entity.displayName || t.entity.name,
         website: t.entity.website,
         domain: t.entity.domain,
         description: t.entity.description || null,
         entityId: t.entity.entityId,
-        evidenceIds: t.evidenceIds
+        evidenceIds: t.evidenceIds,
+        pageKind: t.classification?.pageKind
       })),
       top: top.slice(0, Math.min(5, top.length)).map((t) => t.entity),
+      rejected: buckets.rejected.slice(0, 20).map((r) => ({
+        title: r.title || r.organizationName,
+        url: r.url || r.website,
+        reason: r.reason || r.classification?.reasons?.join(',')
+      })),
+      quality,
+      ranking,
+      adaptations,
+      vocabulary: vocabulary.slice(0, 8),
+      playbook: playbook.class,
+      unknowns,
       gaps,
       errors,
       stopReason: request.stopReason || (top.length >= request.quantity ? 'requested quantity reached' : 'search exhausted'),
-      report: this.formatReport(request, top, gaps, queries),
+      report: this.formatReport(request, top, gaps, queries, quality, adaptations),
       contacted: false,
       fabricated: false
     };
@@ -237,9 +469,13 @@ export class IntelligenceFabric {
       name,
       website,
       domain: prospect.domain,
-      type: /app|platform|tracker|software/i.test(`${name} ${prospect.description || ''}`)
+      title: prospect.title || name,
+      jsonLdName: prospect.jsonLdName,
+      ogSiteName: prospect.ogSiteName,
+      objectiveId: meta.request?.objectiveId,
+      type: /app|platform|tracker|software|receptionist/i.test(`${name} ${prospect.description || ''}`)
         ? 'PRODUCT'
-        : 'ORGANIZATION',
+        : (meta.pageKind === 'PRODUCT' || meta.pageKind === 'APP' ? 'PRODUCT' : 'ORGANIZATION'),
       provenance: { query: meta.query, provider: meta.provider }
     });
     const trust = firstParty(meta.sourceUrl || website, up.entity.domain)
@@ -316,17 +552,19 @@ export class IntelligenceFabric {
     };
   }
 
-  formatReport(request, top, gaps, queries) {
+  formatReport(request, top, gaps, queries, quality = null, adaptations = []) {
     const lines = [
-      `Intelligence ${request.intent} · ${top.length} entities (requested ${request.quantity}).`,
-      `Queries: ${queries.map((q) => q.query).join(' | ')}`,
+      `Intelligence ${request.intent} · ${top.length} legitimate entities (requested ${request.quantity}).`,
+      quality ? `Quality: ${quality.classification}` : null,
+      `Queries: ${(queries || []).map((q) => q.query || q).join(' | ')}`,
+      adaptations.length ? `Adaptations: ${adaptations.map((a) => a.kind).join(', ')}` : null,
       ...top.slice(0, 8).map((t, i) => {
         const ev = t.evidence?.sourceUrl || t.entity.website || 'n/a';
-        return `#${i + 1} ${t.entity.name} · ${t.entity.domain || 'no domain'} · ${ev}`;
+        return `#${i + 1} ${t.entity.displayName || t.entity.name} · ${t.entity.domain || 'no domain'} · ${ev}`;
       }),
-      ...gaps.map((g) => `Gap: ${g.detail}`),
+      ...gaps.map((g) => `Gap: ${g.detail || g.reason}`),
       'Discovered prospects contacted: 0.'
-    ];
+    ].filter(Boolean);
     return lines.join('\n');
   }
 

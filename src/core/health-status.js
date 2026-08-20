@@ -166,9 +166,15 @@ export async function collectDay1Health(server = {}) {
       return { state: 'UNAVAILABLE', detail: 'intelligence fabric not initialized' };
     }
     const stats = server.intelStore?.snapshot?.() || {};
+    const dur = stats.durability || server.intelStore?.durability || {};
+    const supabaseState = dur.supabase || 'UNVERIFIED';
+    const state = (!server.intelFabric && !server.intelStore)
+      ? 'UNAVAILABLE'
+      : (supabaseState === 'DEGRADED' || supabaseState === 'UNAVAILABLE' ? 'DEGRADED' : 'HEALTHY');
     return {
-      state: 'HEALTHY',
-      detail: `entities=${stats.entitiesStored || 0} claims=${stats.claimsStored || 0} evidence=${stats.evidenceRecords || 0}`,
+      state,
+      detail: `entities=${stats.entitiesStored || 0} claims=${stats.claimsStored || 0} evidence=${stats.evidenceRecords || 0} supabase=${supabaseState}`,
+      durability: dur,
       ...stats
     };
   });

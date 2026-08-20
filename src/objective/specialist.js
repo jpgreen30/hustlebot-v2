@@ -76,6 +76,30 @@ export const ROLE_SPEC = {
   'entity-researcher': {
     taskClass: TASK_CLASS.EXTRACTION,
     capabilities: ['company.research', 'intelligence.inspect', 'web.scrape']
+  },
+  'ecosystem-scout': {
+    taskClass: TASK_CLASS.EXTRACTION,
+    capabilities: ['web.search', 'intelligence.research', 'org.discover']
+  },
+  'vocabulary-scout': {
+    taskClass: TASK_CLASS.EXTRACTION,
+    capabilities: ['web.search', 'intelligence.research']
+  },
+  'candidate-scout': {
+    taskClass: TASK_CLASS.EXTRACTION,
+    capabilities: ['org.discover', 'web.search']
+  },
+  'entity-resolver': {
+    taskClass: TASK_CLASS.REASONING,
+    capabilities: ['intelligence.inspect', 'intelligence.verify']
+  },
+  'evidence-critic': {
+    taskClass: TASK_CLASS.REASONING,
+    capabilities: ['intelligence.inspect']
+  },
+  'gap-researcher': {
+    taskClass: TASK_CLASS.EXTRACTION,
+    capabilities: ['org.discover', 'web.search', 'intelligence.research']
   }
 };
 

@@ -1,12 +1,13 @@
 /**
  * Durable intelligence store.
- * File = local tests. Redis = hot cache + Render-durable replica.
- * Supabase = preferred durable SoT for evidence/entities/memory.
+ * File = local tests. Redis = hot cache + Render replica.
+ * Supabase = durable SoT. Production writes that fail mark intel DEGRADED.
  */
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { atomicWrite } from '../runtime/journal.js';
+import { EMPTY_METRICS } from './schema.js';
 
 const TABLES = {
   memories: 'operational_memories',
@@ -15,8 +16,24 @@ const TABLES = {
   sources: 'intelligence_sources',
   claims: 'intelligence_claims',
   evidence: 'intelligence_evidence',
-  relations: 'intelligence_relations'
+  relations: 'intelligence_relations',
+  runs: 'intelligence_runs',
+  adaptations: 'intelligence_adaptations',
+  queryObs: 'intelligence_query_obs',
+  sourceObs: 'intelligence_source_obs',
+  playbooks: 'intelligence_playbooks',
+  metrics: 'intelligence_metrics'
 };
+
+const REQUIRED_TABLES = [
+  'operational_memories',
+  'intelligence_entities',
+  'intelligence_aliases',
+  'intelligence_sources',
+  'intelligence_claims',
+  'intelligence_evidence',
+  'intelligence_relations'
+];
 
 function rowId(rec, kind) {
   if (kind === 'entities') return rec.entityId || rec.id;
@@ -27,16 +44,22 @@ function rowId(rec, kind) {
   if (kind === 'relations') return rec.relationId || rec.id;
   if (kind === 'memories') return rec.memoryId || rec.id;
   if (kind === 'requests') return rec.intelligenceRequestId || rec.id;
+  if (kind === 'runs') return rec.runId || rec.id;
+  if (kind === 'adaptations') return rec.adaptationId || rec.id;
+  if (kind === 'queryObs' || kind === 'sourceObs') return rec.observationId || rec.id;
+  if (kind === 'playbooks') return rec.playbookId || rec.id;
+  if (kind === 'metrics') return rec.id || 'global';
   return rec.id || rec.entityId || rec.aliasId || rec.sourceId || rec.claimId || rec.evidenceId || rec.relationId || rec.memoryId;
 }
 
 export class IntelStore {
-  constructor({ dir, redis, supabase, namespace = 'hustlebot:intel' } = {}) {
+  constructor({ dir, redis, supabase, namespace = 'hustlebot:intel', production = false } = {}) {
     this.dir = dir || null;
     if (this.dir) mkdirSync(this.dir, { recursive: true });
     this.redis = redis || null;
     this.supabase = supabase || null;
     this.namespace = namespace;
+    this.production = production || process.env.NODE_ENV === 'production' || process.env.RENDER === 'true';
     this.collections = {
       entities: new Map(),
       aliases: new Map(),
@@ -45,19 +68,23 @@ export class IntelStore {
       evidence: new Map(),
       relations: new Map(),
       memories: new Map(),
-      requests: new Map()
+      requests: new Map(),
+      runs: new Map(),
+      adaptations: new Map(),
+      queryObs: new Map(),
+      sourceObs: new Map(),
+      playbooks: new Map(),
+      metrics: new Map()
     };
-    this.stats = {
-      entitiesStored: 0,
-      claimsStored: 0,
-      evidenceRecords: 0,
-      sourcesUsed: 0,
-      sourceFailures: 0,
-      conflictsDetected: 0,
-      staleClaims: 0,
-      researchCacheHits: 0,
-      entityMerges: 0,
-      entityMergeRefusals: 0
+    this.stats = { ...EMPTY_METRICS, entitiesStored: 0, claimsStored: 0, evidenceRecords: 0, staleClaims: 0, researchCacheHits: 0 };
+    this.durability = {
+      supabase: this.supabase ? 'UNVERIFIED' : 'UNAVAILABLE',
+      tables: [],
+      missing: [],
+      lastError: null,
+      lastOkAt: null,
+      writes: 0,
+      failures: 0
     };
     if (this.dir) this.loadDir();
   }
@@ -82,6 +109,37 @@ export class IntelStore {
     return join(folder, `${id}.json`);
   }
 
+  async probeSupabase() {
+    if (!this.supabase?.from) {
+      this.durability.supabase = 'UNAVAILABLE';
+      this.durability.lastError = 'no supabase client';
+      return this.durability;
+    }
+    const present = [];
+    const missing = [];
+    for (const table of REQUIRED_TABLES) {
+      try {
+        const { error } = await this.supabase.from(table).select('id').limit(1);
+        if (error && /does not exist|42P01|schema cache/i.test(error.message || '')) missing.push(table);
+        else if (error) missing.push(`${table}:${error.message}`);
+        else present.push(table);
+      } catch (error) {
+        missing.push(`${table}:${error.message}`);
+      }
+    }
+    this.durability.tables = present;
+    this.durability.missing = missing;
+    if (missing.length) {
+      this.durability.supabase = 'DEGRADED';
+      this.durability.lastError = `missing/unreadable: ${missing.join(',')}`;
+    } else {
+      this.durability.supabase = 'HEALTHY';
+      this.durability.lastError = null;
+      this.durability.lastOkAt = new Date().toISOString();
+    }
+    return this.durability;
+  }
+
   async put(kind, rec) {
     const id = rowId(rec, kind);
     if (!id) return rec;
@@ -93,7 +151,7 @@ export class IntelStore {
       try {
         await this.redis.set(`${this.namespace}:${kind}:${id}`, JSON.stringify(rec), 'EX', 30 * 24 * 3600);
         await this.redis.sadd(`${this.namespace}:${kind}`, id);
-      } catch { /* optional */ }
+      } catch { /* optional replica */ }
     }
     const table = TABLES[kind];
     if (this.supabase?.from && table) {
@@ -103,10 +161,20 @@ export class IntelStore {
           payload: rec,
           updated_at: rec.updatedAt
         });
-        if (error && !/does not exist|42P01|schema cache/i.test(error.message || '')) {
-          /* keep going; redis/file remain */
+        if (error) {
+          this.durability.failures += 1;
+          this.durability.lastError = error.message;
+          if (this.production) this.durability.supabase = 'DEGRADED';
+        } else {
+          this.durability.writes += 1;
+          this.durability.lastOkAt = rec.updatedAt;
+          if (this.durability.supabase !== 'DEGRADED') this.durability.supabase = 'HEALTHY';
         }
-      } catch { /* optional */ }
+      } catch (error) {
+        this.durability.failures += 1;
+        this.durability.lastError = error.message;
+        if (this.production) this.durability.supabase = 'DEGRADED';
+      }
     }
     return rec;
   }
@@ -119,12 +187,34 @@ export class IntelStore {
     return [...(this.collections[kind]?.values() || [])].slice(-limit);
   }
 
+  async deleteRedis(kind, id) {
+    if (!this.redis) return false;
+    try {
+      await this.redis.del(`${this.namespace}:${kind}:${id}`);
+      if (this.redis.srem) await this.redis.srem(`${this.namespace}:${kind}`, id);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  bump(metric, n = 1) {
+    if (this.stats[metric] == null) this.stats[metric] = 0;
+    this.stats[metric] += n;
+  }
+
+  async persistMetrics() {
+    const rec = { id: 'global', ...this.stats, updatedAt: new Date().toISOString() };
+    await this.put('metrics', rec);
+    return rec;
+  }
+
   async hydrate() {
     let n = 0;
     if (this.supabase?.from) {
       for (const [kind, table] of Object.entries(TABLES)) {
         try {
-          const { data, error } = await this.supabase.from(table).select('id,payload').limit(500);
+          const { data, error } = await this.supabase.from(table).select('id,payload').limit(800);
           if (error || !data) continue;
           for (const row of data) {
             const rec = row.payload || row;
@@ -142,6 +232,7 @@ export class IntelStore {
           const ids = await this.redis.smembers(`${this.namespace}:${kind}`);
           for (const id of ids || []) {
             if (this.collections[kind].has(id)) {
+              this.stats.cacheHits += 1;
               this.stats.researchCacheHits += 1;
               continue;
             }
@@ -151,6 +242,12 @@ export class IntelStore {
             n++;
           }
         } catch { /* optional */ }
+      }
+    }
+    const metrics = this.get('metrics', 'global');
+    if (metrics) {
+      for (const key of Object.keys(EMPTY_METRICS)) {
+        if (typeof metrics[key] === 'number') this.stats[key] = metrics[key];
       }
     }
     this.refreshStats();
@@ -167,7 +264,8 @@ export class IntelStore {
   }
 
   snapshot() {
-    return this.refreshStats();
+    const stats = this.refreshStats();
+    return { ...stats, durability: { ...this.durability } };
   }
 
   putEntity(rec) { return this.put('entities', rec); }

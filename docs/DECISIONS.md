@@ -4,6 +4,32 @@
 
 ---
 
+## Entry 00D10: Day-10 research quality engine + knowledge consolidation
+
+**Date**: 2026-08-20  
+**Decision**: Compose a research-quality evaluator, adaptive query strategy, and knowledge consolidation over the Day-9 evidence graph. Do not introduce a graph database, vector DB, LangGraph, CrewAI, or a competitor list.
+
+### Persistence
+
+- **Supabase** is the durable SoT for intelligence JSONB tables (Day-9 002 + Day-10 003: runs, adaptations, query/source observations, playbooks, metrics).
+- Production writes that fail mark intel health **DEGRADED**. Fail-open is no longer silent.
+- **Redis** remains the hot replica/cache. Redis-only survival does not satisfy Day-10.
+- **Mem0** is still not the source of truth.
+
+### Quality
+
+Evaluate against the objective (entity-type fit, quantity coverage, noise, first-party, diversity). Classifications: STRONG / ACCEPTABLE / WEAK / FAILED. Listicles, directories, APK mirrors, and clinical orgs do not occupy product-landscape candidate slots.
+
+### Adaptation
+
+Weak/failed research proposes novel queries and source-type changes within budget. LLM suggestions are validated. Poisoned operational memory (e.g. "use Wikipedia for all product discovery") is not authoritative.
+
+### Outbound
+
+Unchanged. Discovery is not permission to contact.
+
+---
+
 ## Entry 00D9: Day-9 persistent intelligence fabric + evidence graph
 
 **Date**: 2026-08-20  

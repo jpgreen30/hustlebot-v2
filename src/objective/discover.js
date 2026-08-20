@@ -2,6 +2,7 @@ import { normalizeDomain, normalizeUrl } from '../acquisition/normalize.js';
 import { extractProspectsFromPage } from '../acquisition/extract.js';
 import { mapLimit } from './util.js';
 import { planSearchQueries } from '../intel/queries.js';
+import { classifySearchResult, RESULT_ROLE } from '../intel/classify.js';
 
 const AGGREGATOR_HOST = /(^|\.)(yelp|angi|thumbtack|bbb|mapquest|forbes|bing|google|duckduckgo|homeguide|ontoplist|expertise|yellowpages|superpages|manta|hotfrog)\.com$|(^|\.)(roof\.info)$/i;
 const JUNK_HOST = /(^|\.)(wikipedia\.org|britannica\.com|latimes\.com|nytimes\.com|washingtonpost\.com|cnn\.com|bbc\.com|merriam-webster\.com|spanishdict\.com|dictionary\.cambridge\.org|collinsdictionary\.com|definitions\.net|dictionary\.com|thefreedictionary\.com|urbandictionary\.com|wikihow\.com|quora\.com|imdb\.com|abbreviationfinder\.org|acronymfinder\.com|microsoft\.com|xbox\.com|fortnite\.gg|epicgames\.com)$/i;
@@ -522,6 +523,11 @@ export class OrgDiscovery {
           if (!item.organizationName && !item.title && !item.name) return false;
           const topicalQuery = item._query || query;
           if (!onTopic(item, topicalQuery, intent) && !onTopic(item, query, intent)) return false;
+          const classified = classifySearchResult(item, query);
+          if (classified.role === RESULT_ROLE.REJECT) return false;
+          if (classified.role === RESULT_ROLE.SOURCE && classified.pageKind === 'LISTICLE') return false;
+          if (classified.role === RESULT_ROLE.SOURCE && classified.pageKind === 'MIRROR') return false;
+          if (classified.role === RESULT_ROLE.SOURCE && classified.pageKind === 'CLINICAL') return false;
           if (item.promotedFrom) return looksLikeCompany(item);
           if (extraSet.has(String(item.url || '').toLowerCase())) {
             return looksLikeCompany(item) || looksLikeDirectory(item);

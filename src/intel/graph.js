@@ -6,8 +6,9 @@
 import { normalizeDomain, normalizeUrl, normalizeOrganizationName } from '../acquisition/normalize.js';
 import { wrapUntrusted } from '../objective/context-pack.js';
 import {
-  ENTITY_TYPE, CLAIM_STATUS, TRUST_CLASS, FRESHNESS_TTL_MS, newId, fingerprintText
+  ENTITY_TYPE, CLAIM_STATUS, TRUST_CLASS, FRESHNESS_TTL_MS, CLAIM_CURRENCY, newId, fingerprintText
 } from './schema.js';
+import { registrableParts, normalizeProductAlias, preferredDisplayName } from './names.js';
 
 export function stripLegalSuffix(name = '') {
   return String(name)
@@ -39,6 +40,22 @@ export function decideMerge(a = {}, b = {}) {
   if (da && db && da === db) {
     return { merge: true, reason: `shared canonical domain ${da}` };
   }
+  if (da && db && da !== db) {
+    const ra = registrableParts(da);
+    const rb = registrableParts(db);
+    if (ra.sld && ra.sld === rb.sld && ra.sld.length >= 4) {
+      const cross = Boolean(
+        (a.crossLinks || []).some((u) => String(u).includes(db))
+        || (b.crossLinks || []).some((u) => String(u).includes(da))
+        || (a.jsonLdSameAs && b.jsonLdSameAs && a.jsonLdSameAs === b.jsonLdSameAs)
+        || (a.canonicalBrand && a.canonicalBrand === b.canonicalBrand && (a.canonicalBrandEvidence || b.canonicalBrandEvidence))
+      );
+      if (cross) {
+        return { merge: true, reason: `regional domain ${da} / ${db} with identity evidence (${ra.sld})` };
+      }
+      return { merge: false, reason: 'regional domain without identity evidence' };
+    }
+  }
   const pa = new Set(a.providerIds || []);
   const overlap = (b.providerIds || []).filter((id) => pa.has(id));
   if (overlap.length) return { merge: true, reason: `shared provider id ${overlap[0]}` };
@@ -67,6 +84,15 @@ export function decideMerge(a = {}, b = {}) {
     return { merge: true, reason: 'name containment with a single known domain' };
   }
 
+  const pna = normalizeProductAlias(a.name || a.organizationName);
+  const pnb = normalizeProductAlias(b.name || b.organizationName);
+  if (pna && pnb && pna === pnb && pna.length >= 6) {
+    if (da && db && da !== db) {
+      return { merge: false, reason: 'product alias match but different domains' };
+    }
+    return { merge: true, reason: 'shared product alias without conflicting domain' };
+  }
+
   return { merge: false, reason: 'insufficient identity evidence' };
 }
 
@@ -89,17 +115,31 @@ export class EvidenceGraph {
     const domain = normalizeDomain(input.domain || input.website) || null;
     const name = normalizeOrganizationName(input.name || input.organizationName || input.title) || input.name || null;
     const website = normalizeUrl(input.website || (domain ? `https://${domain}` : null));
+    const displayName = preferredDisplayName({
+      name: name,
+      organizationName: name,
+      domain,
+      website,
+      title: input.title || input.pageTitle,
+      jsonLdName: input.jsonLdName,
+      ogSiteName: input.ogSiteName,
+      ogTitle: input.ogTitle,
+      officialName: input.officialName
+    }) || name;
     const candidate = {
       entityId: input.entityId || newId('ent'),
       type: input.type || ENTITY_TYPE.ORGANIZATION,
-      name,
+      name: displayName,
+      displayName,
       domain,
       website,
       providerIds: input.providerIds || [],
       aliases: input.aliases || [],
+      objectiveIds: input.objectiveId ? [input.objectiveId] : [],
       firstObservedAt: input.firstObservedAt || new Date().toISOString(),
       lastVerifiedAt: input.lastVerifiedAt || null,
       provenance: input.provenance || {},
+      completeness: input.completeness || {},
       fabricated: false
     };
 
@@ -107,7 +147,11 @@ export class EvidenceGraph {
       const decision = decideMerge(existing, candidate);
       if (decision.merge) {
         const merged = this.mergeEntities(existing, candidate, decision.reason);
+        if (input.objectiveId) {
+          merged.objectiveIds = [...new Set([...(merged.objectiveIds || []), input.objectiveId])];
+        }
         this.store.stats.entityMerges += 1;
+        this.store.bump?.('entityMerges');
         await this.store.putEntity(merged);
         await this.addAlias({
           alias: name,
@@ -120,8 +164,9 @@ export class EvidenceGraph {
         }
         return { entity: merged, merged: true, reason: decision.reason };
       }
-      if (!decision.merge && /different domains|ambiguous/i.test(decision.reason)) {
+      if (!decision.merge && /different domains|ambiguous|regional domain without identity/i.test(decision.reason)) {
         this.store.stats.entityMergeRefusals += 1;
+        this.store.bump?.('entityMergeRefusals');
         await this.store.put('relations', {
           relationId: newId('rel'),
           fromId: existing.entityId,
@@ -143,11 +188,17 @@ export class EvidenceGraph {
     const pick = (a, b) => a || b || null;
     return {
       ...winner,
-      name: pick(winner.name, incoming.name),
+      name: preferredDisplayName({
+        name: pick(winner.displayName || winner.name, incoming.displayName || incoming.name),
+        domain: pick(winner.domain, incoming.domain),
+        title: incoming.title
+      }) || pick(winner.displayName || winner.name, incoming.displayName || incoming.name),
+      displayName: pick(winner.displayName, incoming.displayName),
       domain: pick(winner.domain, incoming.domain),
       website: pick(winner.website, incoming.website),
       providerIds: [...new Set([...(winner.providerIds || []), ...(incoming.providerIds || [])])],
-      aliases: [...new Set([...(winner.aliases || []), incoming.name, incoming.domain].filter(Boolean))],
+      aliases: [...new Set([...(winner.aliases || []), incoming.name, incoming.domain, incoming.displayName].filter(Boolean))],
+      objectiveIds: [...new Set([...(winner.objectiveIds || []), ...(incoming.objectiveIds || [])])],
       lastVerifiedAt: pick(incoming.lastVerifiedAt, winner.lastVerifiedAt),
       mergeHistory: [
         ...(winner.mergeHistory || []),
@@ -215,6 +266,7 @@ export class EvidenceGraph {
     };
     await this.store.putEvidence(rec);
     this.store.stats.evidenceRecords = this.store.collections.evidence.size;
+    this.store.bump?.('evidenceCreated');
     return rec;
   }
 
@@ -243,13 +295,31 @@ export class EvidenceGraph {
     const existing = this.claims().filter((c) =>
       c.subjectEntityId === input.subjectEntityId && c.predicate === predicate
     );
-    const conflict = existing.find((c) => String(c.value) !== String(value) && c.status !== CLAIM_STATUS.STALE);
+    const conflict = existing.find((c) =>
+      String(c.value) !== String(value)
+      && c.status !== CLAIM_STATUS.STALE
+      && c.currency !== CLAIM_CURRENCY.SUPERSEDED
+      && c.currency !== CLAIM_CURRENCY.HISTORICAL
+    );
     const evidenceIds = [...(input.evidenceIds || [])];
     const independent = this.independentEvidence(evidenceIds);
     let status = input.status || CLAIM_STATUS.DISCOVERED;
+    let currency = input.currency || CLAIM_CURRENCY.CURRENT;
+    let supersedes = null;
     if (conflict) {
-      status = CLAIM_STATUS.CONFLICTED;
-      this.store.stats.conflictsDetected += 1;
+      const incomingTs = Date.parse(input.validFrom || input.publishedAt || now);
+      const existingTs = Date.parse(conflict.validFrom || conflict.firstObservedAt || 0);
+      const shouldSupersede = input.supersede === true
+        || (input.currency === CLAIM_CURRENCY.CURRENT && Number.isFinite(incomingTs) && Number.isFinite(existingTs) && incomingTs > existingTs);
+      if (shouldSupersede) {
+        status = CLAIM_STATUS.DISCOVERED;
+        currency = CLAIM_CURRENCY.CURRENT;
+        supersedes = conflict.claimId;
+      } else {
+        status = CLAIM_STATUS.CONFLICTED;
+        this.store.stats.conflictsDetected += 1;
+        this.store.bump?.('conflictsDetected');
+      }
     } else if (independent.length >= 2 && independent.some((e) => e.trustClass === TRUST_CLASS.FIRST_PARTY)) {
       status = CLAIM_STATUS.CORROBORATED;
     } else if (independent.length >= 2) {
@@ -266,19 +336,31 @@ export class EvidenceGraph {
       predicate,
       value,
       status,
+      currency,
+      validFrom: input.validFrom || now,
+      validTo: input.validTo || null,
+      supersededBy: null,
+      supersedes,
       confidence: Number(input.confidence ?? (status === CLAIM_STATUS.CORROBORATED ? 0.72 : 0.45)),
       evidenceIds,
       independentEvidenceCount: independent.length,
       firstObservedAt: existing[0]?.firstObservedAt || now,
       lastVerifiedAt: now,
       expiresAt: new Date(Date.now() + ttlFor(predicate)).toISOString(),
-      conflictWith: conflict?.claimId || null,
-      conflictNote: conflict
+      conflictWith: (!supersedes && conflict) ? conflict.claimId : null,
+      conflictNote: (!supersedes && conflict)
         ? `Source disagreement: ${conflict.value} vs ${value}. Authority/first-party/freshness not arbitrarily resolved.`
-        : null
+        : (supersedes ? `Supersedes ${supersedes}` : null)
     };
     await this.store.putClaim(rec);
-    if (conflict) {
+    this.store.bump?.('claimsCreated');
+    if (conflict && supersedes) {
+      conflict.currency = CLAIM_CURRENCY.SUPERSEDED;
+      conflict.status = CLAIM_STATUS.STALE;
+      conflict.validTo = rec.validFrom;
+      conflict.supersededBy = rec.claimId;
+      await this.store.putClaim(conflict);
+    } else if (conflict && !supersedes) {
       conflict.status = CLAIM_STATUS.CONFLICTED;
       conflict.conflictWith = rec.claimId;
       await this.store.putClaim(conflict);
@@ -338,9 +420,25 @@ export class EvidenceGraph {
     if (byAlias) return this.why(byAlias.entityId);
     const named = this.entities().find((e) =>
       (e.name || '').toLowerCase().includes(q.toLowerCase())
+      || (e.displayName || '').toLowerCase().includes(q.toLowerCase())
       || (e.domain || '').includes(q.toLowerCase())
     );
     if (named) return this.why(named.entityId);
     return { report: `No persisted intelligence about “${q}”.`, entity: null };
+  }
+
+  objectiveSnapshot(objectiveId) {
+    if (!objectiveId) return { entities: [], claims: [], evidence: [], sources: [], adaptations: [] };
+    const evidence = this.evidence().filter((e) => e.objectiveId === objectiveId);
+    const entityIds = new Set([
+      ...evidence.map((e) => e.entityId).filter(Boolean),
+      ...this.entities().filter((e) => (e.objectiveIds || []).includes(objectiveId)).map((e) => e.entityId)
+    ]);
+    const entities = this.entities().filter((e) => entityIds.has(e.entityId));
+    const claims = this.claims().filter((c) => entityIds.has(c.subjectEntityId));
+    const sources = [...new Set(evidence.map((e) => e.sourceUrl || e.provider).filter(Boolean))];
+    const adaptations = this.store.list('adaptations').filter((a) => a.objectiveId === objectiveId);
+    const run = this.store.list('runs').filter((r) => r.objectiveId === objectiveId).slice(-1)[0] || null;
+    return { objectiveId, entities, claims, evidence, sources, adaptations, run };
   }
 }

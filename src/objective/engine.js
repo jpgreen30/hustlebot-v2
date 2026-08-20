@@ -22,6 +22,8 @@ import { decideDelegation } from './delegate.js';
 import { SwarmOrchestrator } from './swarm.js';
 import { SPECIALIST_STATUS } from './specialist.js';
 import { matchIntelControl, formatIntelReply } from '../intel/control.js';
+import { evaluateResearch } from '../intel/quality.js';
+import { classifySearchResult, RESULT_ROLE } from '../intel/classify.js';
 
 export class MacGyverEngine {
   constructor({
@@ -526,12 +528,34 @@ export class MacGyverEngine {
     } else {
       const prospects = reportNode?.top || reportNode?.prospects || [];
       const comparison = compareNode?.comparison || compareNode?.result || reportNode?.comparison || null;
+      const rejected = [];
+      const accepted = [];
+      for (const p of prospects) {
+        const classified = classifySearchResult({
+          title: p.organizationName || p.name,
+          url: p.website,
+          snippet: p.description
+        }, objective.rawRequest || '');
+        if (classified.role === RESULT_ROLE.CANDIDATE) accepted.push(p);
+        else rejected.push({ title: p.organizationName || p.name, url: p.website, reason: classified.reasons.join(',') });
+      }
+      const quality = evaluateResearch({
+        question: objective.rawRequest,
+        requested: objective.context?.findN || 10,
+        accepted,
+        rejected,
+        geography: objective.context?.location
+      });
       objective.result = {
-        prospects,
-        top: (reportNode?.top || prospects).slice(0, objective.context?.topN || 5),
-        report: reportNode?.report || this.formatResult(objective, prospects),
+        prospects: accepted,
+        top: accepted.slice(0, objective.context?.topN || 5),
+        report: reportNode?.report || this.formatResult(objective, accepted),
         comparison,
-        providers: [...new Set(objective.executions.map((e) => e.provider).filter(Boolean))]
+        providers: [...new Set(objective.executions.map((e) => e.provider).filter(Boolean))],
+        quality,
+        rejected,
+        gaps: quality.gaps,
+        contacted: false
       };
     }
     const failed = (plan.nodes || []).filter((n) => n.status === 'failed');
@@ -911,7 +935,11 @@ export class MacGyverEngine {
     }
     const swarmActions = new Set(['workers', 'why-delegate', 'worker-models', 'worker-tools', 'worker-findings', 'stop-workers', 'pause']);
     const record = this.get(input.objectiveId || 'latest');
-    const intelInspect = new Set(['know-about', 'sources-used', 'show-evidence', 'uncertain', 'conflicts', 'last-verified']);
+    const intelInspect = new Set([
+      'know-about', 'sources-used', 'show-evidence', 'uncertain', 'conflicts', 'last-verified',
+      'research-quality', 'why-searched', 'why-adapted', 'rejected-results', 'why-rejected',
+      'still-missing', 'best-source', 'first-party-only', 'inferred-claims', 'learned-strategy'
+    ]);
     const intelAct = new Set(['why-ranked', 'research-deeper', 'another-source', 'verify-claim']);
     if (intelInspect.has(matched?.action)) {
       if (!this.intel) return { status: 'empty', report: 'Intelligence fabric not initialized.' };

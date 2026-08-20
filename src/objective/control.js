@@ -37,7 +37,17 @@ const CONTROL_PATTERNS = [
   { action: 'research-deeper', re: /research this deeper|go deeper|dig deeper/i },
   { action: 'another-source', re: /find another source|try another source/i },
   { action: 'verify-claim', re: /verify this claim|verify that/i },
-  { action: 'know-about', re: /what do you know about\s+(.+)/i }
+  { action: 'know-about', re: /what do you know about\s+(.+)/i },
+  { action: 'research-quality', re: /how good is this research|research quality/i },
+  { action: 'why-searched', re: /why did you search that|why (those|these) quer/i },
+  { action: 'why-adapted', re: /why did you change (your )?research strategy|why (did you )?adapt/i },
+  { action: 'rejected-results', re: /which results did you reject|what did you reject|rejected results/i },
+  { action: 'why-rejected', re: /why was this result rejected|why reject/i },
+  { action: 'still-missing', re: /what are we still missing|what(?:'s| is) missing/i },
+  { action: 'best-source', re: /what source performed best|best source/i },
+  { action: 'first-party-only', re: /show only first-party evidence|first-party evidence/i },
+  { action: 'inferred-claims', re: /which claims are inferred|inferred claims/i },
+  { action: 'learned-strategy', re: /what did you learn from this research|learned strategy/i }
 ];
 
 export function matchObjectiveControl(text) {

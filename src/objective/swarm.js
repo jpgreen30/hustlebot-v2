@@ -20,6 +20,7 @@ import { packContext, wrapUntrusted } from './context-pack.js';
 import { arbitrate } from './arbitrate.js';
 import { shouldRunCritic, critique } from './critic.js';
 import { looksLikeCompany, isJunkResult, discoveryIntent, onTopic } from './discover.js';
+import { classifySearchResult, RESULT_ROLE } from '../intel/classify.js';
 
 export class SwarmOrchestrator {
   constructor(engine, config = {}) {
@@ -137,6 +138,8 @@ export class SwarmOrchestrator {
       if (/^use my location$/i.test(item.title)) return false;
       if (/yellowpages\.com\/search/i.test(String(item.url || ''))) return false;
       if (isJunkResult(item, intent)) return false;
+      const classified = classifySearchResult(item, objective.rawRequest || '');
+      if (classified.role !== RESULT_ROLE.CANDIDATE) return false;
       const host = String(item.url || '').toLowerCase();
       if (/(chatgpt\.com|openai\.com|claude\.ai|anthropic\.com|gemini\.google|deepai\.org|visitcalifornia\.com|dictionary\.com|fortnite)/i.test(host)
         && !/\b(chatgpt|openai|claude|gemini|deepai)\b/i.test(objective.rawRequest || '')) {
@@ -275,6 +278,7 @@ export class SwarmOrchestrator {
 
     const topN = Number(objective.context?.topN || 5);
     findings = this.keepOnTopic(findings, objective);
+    if (criticResult?.clean) findings = criticResult.clean;
     const synthesized = this.keepOnTopic(synthesizer?.result?.findings || [], objective);
     const ranked = (synthesized.length ? synthesized : findings);
     const top = ranked.slice(0, topN);
@@ -296,6 +300,12 @@ export class SwarmOrchestrator {
       })),
       arbitration,
       critic: criticResult,
+      quality: criticResult?.quality || null,
+      rejected: (criticResult?.occupying || []).map((p) => ({
+        title: p.organizationName || p.name,
+        url: p.website,
+        reason: p.classification?.reasons?.join(',')
+      })),
       contacted: false
     };
     objective.contacted = false;
