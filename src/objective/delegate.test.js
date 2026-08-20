@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { CapabilityRegistry } from '../core/capability-registry.js';
 import { inspectCatalogue } from './catalogue.js';
 import { interpretObjective, extractQuantities } from './interpret.js';
-import { decideDelegation } from './delegate.js';
+import { decideDelegation, landscapeSlices } from './delegate.js';
 import { grantForRole, isGranted, createSpecialist, SPECIALIST_STATUS } from './specialist.js';
 import { wrapUntrusted, UNTRUSTED_POLICY } from './context-pack.js';
 import { arbitrate } from './arbitrate.js';
@@ -220,6 +220,14 @@ describe('Day-7 delegation decision', () => {
     const decision = decideDelegation(obj);
     assert.equal(decision.delegate, true);
     assert.ok(!decision.pattern.includes('babytobloom-competitive'));
+  });
+
+  test('dental landscape slices are topic phrases not California providers', () => {
+    const slices = landscapeSlices('Research the competitive landscape for AI receptionist solutions serving dental practices in California. Identify providers and public pricing. Do not contact anyone.');
+    const blob = slices.join(' | ');
+    assert.ok(/receptionist|dental/i.test(blob));
+    assert.ok(!/identify providers/i.test(blob));
+    assert.ok(!slices.some((s) => /^in california/i.test(s)));
   });
 });
 

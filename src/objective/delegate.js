@@ -13,6 +13,29 @@ export const DELEGATION_DEFAULTS = {
   maxRepairCycles: 1
 };
 
+export function landscapeSlices(text) {
+  const primary = String(text || '')
+    .replace(/^(research|find|discover|rank|compare|map|identify)\s+\d*\s*/i, '')
+    .replace(/\bdo not contact anyone\.?/gi, '')
+    .replace(/\bidentify\b[^.]*/gi, '')
+    .split(/[.!?]/)[0];
+  const re = /\b((?:ai\s+)?[a-z]{3,}(?:\s+[a-z0-9+]{2,}){0,3}\s+(?:apps?|platforms?|solutions|practices|receptionist))\b/gi;
+  const out = [];
+  let m;
+  while ((m = re.exec(primary))) {
+    let phrase = m[1].replace(/^(the|a|an|for|and|their)\s+/i, '').trim();
+    phrase = phrase.replace(/^(competitive landscape for|landscape for)\s+/i, '');
+    if (!phrase || phrase.split(/\s+/).length > 6) continue;
+    if (/^(in|at|from|california|providers|competitive)\b/i.test(phrase)) continue;
+    if (!out.some((item) => item.toLowerCase() === phrase.toLowerCase())) out.push(phrase);
+  }
+  if (!out.length) {
+    const fallback = primary.replace(/^(the )?competitive landscape for\s+/i, '').slice(0, 90).trim();
+    if (fallback) out.push(fallback);
+  }
+  return out.slice(0, 3);
+}
+
 export function decideDelegation(objective = {}, { catalogue = [] } = {}) {
   const text = String(objective.rawRequest || '');
   const findN = Number(objective.context?.findN || 10);
@@ -53,11 +76,7 @@ export function decideDelegation(objective = {}, { catalogue = [] } = {}) {
   }
 
   if (/competitive landscape|strategic opportunit/i.test(text)) {
-    const inferred = slices.length
-      ? slices
-      : (text.match(/([a-z0-9][a-z0-9&.'/-]*(?:\s+[a-z0-9][a-z0-9&.'/-]*){0,4}\s+(?:apps?|platforms?|solutions|practices|providers|receptionist))/gi) || [])
-        .map((p) => p.trim())
-        .slice(0, 3);
+    const inferred = slices.length ? slices : landscapeSlices(text);
     return {
       delegate: true,
       reason: 'Competitive landscape is independent category research plus synthesis.',

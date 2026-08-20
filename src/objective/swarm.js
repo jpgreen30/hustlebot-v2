@@ -19,7 +19,7 @@ import {
 import { packContext, wrapUntrusted } from './context-pack.js';
 import { arbitrate } from './arbitrate.js';
 import { shouldRunCritic, critique } from './critic.js';
-import { looksLikeCompany, isJunkResult, discoveryIntent } from './discover.js';
+import { looksLikeCompany, isJunkResult, discoveryIntent, onTopic } from './discover.js';
 
 export class SwarmOrchestrator {
   constructor(engine, config = {}) {
@@ -428,6 +428,7 @@ export class SwarmOrchestrator {
           const item = { title: p.organizationName || p.name, url: p.website || p.sourceUrl, snippet: p.description };
           if (!item.title) return false;
           if (isJunkResult(item, intent)) return false;
+          if (!onTopic(item, objective.rawRequest, intent) && !onTopic(item, query, intent)) return false;
           return looksLikeCompany(item) || Boolean(p.domain && p.organizationName);
         });
         specialist.result = emptyResult(findings.length ? 'ok' : 'partial', {

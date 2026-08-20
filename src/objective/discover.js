@@ -244,7 +244,7 @@ function matchesQuery(item, query) {
   return tokens.some((token) => hayHasToken(hay, token) || (token.length > 4 && hay.includes(token)));
 }
 
-function onTopic(item, query, intent = {}) {
+export function onTopic(item, query, intent = {}) {
   const host = hostOf(item.url || item.website);
   if (/\.(edu|gov)$/i.test(host) && !/\b(university|college|school|government|campus)\b/i.test(query)) {
     return false;
