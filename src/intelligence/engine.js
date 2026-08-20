@@ -742,3 +742,16 @@ export class IntelligenceEngine {
     };
   }
 }
+
+/**
+ * HTTP adapter for POST /api/campaign/control.
+ * Must await control() — res.json(promise) serializes to {}.
+ */
+export async function handleCampaignControlHttp(engine, req, res) {
+  if (!engine) {
+    return res.status(503).json({ error: 'Intelligence engine not initialized' });
+  }
+  const result = await engine.control(req.body || {});
+  return res.json(result);
+}
+
