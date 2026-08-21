@@ -12,7 +12,7 @@ import {
 import { planSearchQueries, recordQueryHit } from './queries.js';
 import { SourceRegistry } from './sources.js';
 import { EvidenceGraph } from './graph.js';
-import { classifySearchResult, RESULT_ROLE, inferPlaybookClass } from './classify.js';
+import { classifySearchResult, RESULT_ROLE, inferPlaybookClass, sourceRolesForClassification } from './classify.js';
 import { evaluateResearch, rankingComponents, QUALITY } from './quality.js';
 import { proposeAdaptations, extractVocabulary, isNovelQuery, normalizeQuery } from './adapt.js';
 import { matchPlaybook, recordPlaybookOutcome, shouldTrustObservation } from './playbook.js';
@@ -104,7 +104,8 @@ export class IntelligenceFabric {
       return null;
     }
     if (classified.role === RESULT_ROLE.SOURCE) {
-      buckets.sources.push({ ...item, classification: classified });
+      const sourceRoles = sourceRolesForClassification(classified);
+      buckets.sources.push({ ...item, classification: classified, sourceRoles });
       buckets.rejected.push({ ...item, classification: classified, reason: classified.reasons.join(',') });
       this.store?.bump?.('entitiesRejected');
       if (item.url || item.website) {
@@ -131,6 +132,7 @@ export class IntelligenceFabric {
     }, { ...meta, pageKind: classified.pageKind });
     if (ingested) {
       ingested.classification = classified;
+      ingested.sourceRoles = sourceRolesForClassification(classified);
       ingested.firstParty = ingested.evidence?.trustClass === TRUST_CLASS.FIRST_PARTY;
       buckets.accepted.push(ingested);
       this.store?.bump?.('entitiesAccepted');
@@ -168,6 +170,7 @@ export class IntelligenceFabric {
     const sourcesUsed = [];
     const sourcesAttempted = [];
     const adaptations = [];
+    const discoveryPath = [];
     const down = new Set(context.forceUnavailable || []);
     const vocabulary = [];
     let quality = null;
@@ -241,6 +244,49 @@ export class IntelligenceFabric {
 
     await runQueries(queries);
 
+    // A directory/listicle is never an entity, but it can be mined as a bounded
+    // candidate source. OrgDiscovery owns robots-aware extraction.
+    if (this.discovery?.discover && buckets.sources.length) {
+      const sourcePages = buckets.sources.slice(0, Number(input.maxSourcePages || 4));
+      for (const source of sourcePages) {
+        if (Date.now() - startedAt >= request.maxDurationMs) break;
+        const sourceUrl = source.url || source.website;
+        if (!sourceUrl) continue;
+        const expanded = await this.discovery.discover({
+          sourceUrl,
+          query: request.question,
+          objective: request.question,
+          maxOrganizations: Math.min(Number(input.maxCandidateExpansion || request.quantity * 2), 24),
+          location: hints.geography,
+          industry: hints.industry
+        }, context);
+        const before = findings.length;
+        for (const p of expanded.prospects || []) {
+          const ingested = await this.considerItem({
+            title: p.organizationName || p.name,
+            url: p.website || p.url,
+            snippet: p.description
+          }, {
+            request,
+            query: request.question,
+            provider: (expanded.providers || [])[0],
+            sourceUrl: p.sourceUrl || p.website
+          }, buckets);
+          if (ingested) findings.push(ingested);
+        }
+        discoveryPath.push({
+          depth: 1,
+          sourceUrl,
+          sourceRoles: source.sourceRoles,
+          provider: (expanded.providers || [])[0] || null,
+          candidatesExtracted: Math.max(0, findings.length - before),
+          errors: expanded.errors || []
+        });
+        sourcesAttempted.push(...(expanded.providers || []));
+        sourcesUsed.push(...(expanded.providers || []));
+      }
+    }
+
     if (!findings.length && this.discovery?.discover) {
       const fallback = await this.discovery.discover({
         query: request.question,
@@ -286,7 +332,53 @@ export class IntelligenceFabric {
       return unique;
     };
 
+    const verifyFirstParty = async (rows) => {
+      if (!this.researcher?.research) return;
+      for (const row of rows.slice(0, request.quantity)) {
+        if (Date.now() - startedAt >= request.maxDurationMs) break;
+        if (!row?.entity?.website || row.firstParty) continue;
+        try {
+          const verified = await this.researcher.research({
+            organizationName: row.entity.name,
+            website: row.entity.website,
+            domain: row.entity.domain,
+            description: null,
+            sourceUrl: row.entity.website
+          });
+          const sourceUrl = verified?.provenance?.sourceUrls?.[0];
+          if (verified?.status !== 'ok' || !sourceUrl || !firstParty(sourceUrl, row.entity.domain)) continue;
+          const description = verified.intelligence?.description?.value || row.entity.description;
+          const officialName = verified.intelligence?.companyName?.value || row.entity.name;
+          row.entity.name = preferredDisplayName({
+            name: row.entity.name,
+            officialName,
+            domain: row.entity.domain,
+            title: officialName
+          });
+          row.entity.displayName = row.entity.name;
+          row.entity.description = description || null;
+          const evidence = await this.graph.addEvidence({
+            entityId: row.entity.entityId,
+            objectiveId: request.objectiveId,
+            sourceUrl,
+            sourceType: 'FIRST_PARTY_WEB',
+            excerpt: description || officialName,
+            extractionMethod: verified.provenance?.extractionMethod || 'first-party-verification',
+            query: request.question,
+            provider: verified.provenance?.provider || 'public-web',
+            trustClass: TRUST_CLASS.FIRST_PARTY
+          });
+          row.evidenceIds = [...new Set([...(row.evidenceIds || []), evidence.evidenceId])];
+          row.firstParty = true;
+          row.sourceRoles = [...new Set([...(row.sourceRoles || []), 'FIRST_PARTY_SOURCE', 'EVIDENCE_SOURCE'])];
+        } catch (error) {
+          errors.push({ provider: 'first-party-verification', entity: row.entity.name, error: error.message, kind: 'VERIFY_FAILURE' });
+        }
+      }
+    };
+
     let unique = uniqueRows();
+    await verifyFirstParty(unique);
     quality = evaluateResearch({
       question: request.question,
       requested: request.quantity,
@@ -348,6 +440,7 @@ export class IntelligenceFabric {
         }
       }
       unique = uniqueRows();
+      await verifyFirstParty(unique);
       const after = evaluateResearch({
         question: request.question,
         requested: request.quantity,
@@ -409,6 +502,7 @@ export class IntelligenceFabric {
       accepted: top.length,
       rejected: buckets.rejected.length,
       vocabulary: vocabulary.slice(0, 8),
+      discoveryPath,
       contacted: false,
       createdAt: new Date().toISOString()
     };
@@ -427,6 +521,7 @@ export class IntelligenceFabric {
       sourcesSelected: selected.map((s) => ({ sourceId: s.sourceId, provider: s.provider, reasonSelected: s.reasonSelected })),
       sourcesUsed: [...new Set(sourcesUsed)],
       sourcesAttempted: [...new Set(sourcesAttempted)],
+      discoveryPath,
       entities: top.map((t) => t.entity),
       claims: top.flatMap((t) => t.claims || []),
       evidence: top.flatMap((t) => t.evidence || []),
@@ -437,7 +532,8 @@ export class IntelligenceFabric {
         description: t.entity.description || null,
         entityId: t.entity.entityId,
         evidenceIds: t.evidenceIds,
-        pageKind: t.classification?.pageKind
+        pageKind: t.classification?.pageKind,
+        sourceRoles: t.sourceRoles || []
       })),
       top: top.slice(0, Math.min(5, top.length)).map((t) => t.entity),
       rejected: buckets.rejected.slice(0, 20).map((r) => ({

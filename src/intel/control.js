@@ -18,7 +18,9 @@ export const INTEL_CONTROL = [
   { action: 'best-source', re: /what source performed best|best source/i },
   { action: 'first-party-only', re: /show only first-party evidence|first-party evidence/i },
   { action: 'inferred-claims', re: /which claims are inferred|inferred claims/i },
-  { action: 'learned-strategy', re: /what did you learn from this research|learned strategy/i }
+  { action: 'learned-strategy', re: /what did you learn from this research|learned strategy/i },
+  { action: 'source-failed', re: /what source failed|which (source|provider) failed/i },
+  { action: 'fallback-source', re: /what did you try next|fallback source|alternate source strategy/i }
 ];
 
 export function matchIntelControl(text) {
@@ -59,7 +61,8 @@ export function formatIntelReply(fabric, record, matched) {
   }
   if (action === 'sources-used') {
     if (!graphWide && (record || snap)) {
-      const used = record?.result?.sourcesUsed || record?.intel?.sourcesUsed || snap?.sources || [];
+      const traced = (record?.queryTrace || []).map((t) => t.provider).filter(Boolean);
+      const used = record?.result?.sourcesUsed || record?.intel?.sourcesUsed || traced || snap?.sources || [];
       const urls = (snap?.evidence || []).map((e) => e.sourceUrl).filter(Boolean);
       return {
         status: 'ok',
@@ -129,7 +132,8 @@ export function formatIntelReply(fabric, record, matched) {
     };
   }
   if (action === 'why-searched') {
-    const queries = record?.result?.queries || run?.queries || [];
+    const traced = (record?.queryTrace || []).map((t) => ({ query: t.query, reason: `${t.role || 'worker'} via ${t.provider || t.capability || 'unknown'}` }));
+    const queries = record?.result?.queries || run?.queries || traced;
     const list = queries.map((q) => (q.query ? `${q.query} (${q.reason || ''})` : q));
     return { status: 'ok', report: list.length ? `Queries:\n${list.join('\n')}` : 'No queries recorded for this objective.' };
   }
@@ -142,7 +146,11 @@ export function formatIntelReply(fabric, record, matched) {
     };
   }
   if (action === 'rejected-results' || action === 'why-rejected') {
-    const rejected = record?.result?.rejected || [];
+    const rejected = record?.result?.rejected || (record?.queryTrace || []).filter((t) => t.rejectedCount).map((t) => ({
+      title: t.query,
+      url: t.sourceUrl,
+      reason: `${t.rejectedCount} rejected: ${(t.rejectionReasons || []).join(', ') || 'quality/topic gate'}`
+    }));
     if (!rejected.length) return { status: 'ok', report: 'No rejected results recorded for this objective.' };
     return {
       status: 'ok',
@@ -182,6 +190,18 @@ export function formatIntelReply(fabric, record, matched) {
       status: 'ok',
       report: `Playbook ${pb || 'none'}. Adaptations ${ads.length}. Quality ${record?.result?.quality?.classification || 'n/a'}.`
     };
+  }
+  if (action === 'source-failed') {
+    const failures = (record?.queryTrace || []).filter((t) => t.error);
+    return { status: 'ok', report: failures.length ? failures.map((t) => `${t.provider || t.capability}: ${t.error}`).join('\n') : 'No provider failure recorded for this objective.' };
+  }
+  if (action === 'fallback-source') {
+    const fallback = record?.result?.request?.alternateStrategy || record?.alternateStrategy;
+    if (fallback) return { status: 'ok', report: `${fallback.failed?.provider || 'preferred source'} failed → ${fallback.replacement}. ${fallback.why || ''}` };
+    const traces = record?.queryTrace || [];
+    const failureIndex = traces.findIndex((t) => t.error);
+    const next = failureIndex >= 0 ? traces.slice(failureIndex + 1).find((t) => !t.error) : null;
+    return { status: 'ok', report: next ? `Tried next: ${next.provider || next.capability} for ${next.query}.` : 'No fallback source recorded for this objective.' };
   }
   return null;
 }

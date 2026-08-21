@@ -42,6 +42,16 @@ export const RESULT_ROLE = {
   REJECT: 'REJECT'
 };
 
+export function sourceRolesForClassification(classification = {}) {
+  if (classification.role === RESULT_ROLE.REJECT) return ['UNTRUSTED'];
+  const roles = ['EVIDENCE_SOURCE'];
+  if (classification.role === RESULT_ROLE.CANDIDATE) roles.push('ENTITY_SOURCE');
+  if (classification.role === RESULT_ROLE.SOURCE) roles.push('DISCOVERY_SOURCE');
+  if (classification.pageKind === PAGE_KIND.DIRECTORY) roles.push('DIRECTORY', 'AGGREGATOR');
+  if (classification.pageKind === PAGE_KIND.LISTICLE) roles.push('LISTICLE', 'AGGREGATOR');
+  return [...new Set(roles)];
+}
+
 export const PAGE_KIND = {
   COMPANY: 'COMPANY',
   PRODUCT: 'PRODUCT',

@@ -160,6 +160,12 @@ export class SwarmOrchestrator {
 
   async execute(objective, decision, catalogue, input = {}) {
     const startedAt = Date.now();
+    const budgetMs = Math.max(25, Number(input.objectiveBudgetMs || input.maxDurationMs || objective.context?.maxDurationMs || 90000));
+    const graceMs = Math.max(5, Number(input.deadlineGraceMs || 250));
+    const deadlineAt = startedAt + budgetMs;
+    const controller = new AbortController();
+    const expired = () => Date.now() >= deadlineAt;
+    objective.deadline = { budgetMs, deadlineAt: new Date(deadlineAt).toISOString(), graceMs };
     objective.status = OBJECTIVE_STATUS.RUNNING;
     objective.delegation = {
       ...(objective.delegation || {}),
@@ -187,18 +193,44 @@ export class SwarmOrchestrator {
     );
 
     const runWave = async (wave) => {
-      await mapLimit(wave, this.maxConcurrentWorkers, async (spec) => {
+      const work = mapLimit(wave, this.maxConcurrentWorkers, async (spec) => {
+        if (expired()) {
+          spec.status = SPECIALIST_STATUS.TIMED_OUT;
+          spec.error = 'objective wall-clock deadline reached before launch';
+          spec.completedAt = new Date().toISOString();
+          return;
+        }
         if (objective.status === OBJECTIVE_STATUS.CANCELLED || objective.status === OBJECTIVE_STATUS.PAUSED) {
           spec.status = objective.status === OBJECTIVE_STATUS.CANCELLED ? SPECIALIST_STATUS.CANCELLED : SPECIALIST_STATUS.WAITING;
           return;
         }
-        await this.runSpecialist(spec, objective, catalogue, input, byId);
+        await this.runSpecialist(spec, objective, catalogue, { ...input, signal: controller.signal, deadlineAt }, byId);
         this.engine.persist(objective);
       });
+      const remainingMs = Math.max(0, deadlineAt - Date.now());
+      let timer;
+      await Promise.race([
+        work,
+        new Promise((resolve) => { timer = setTimeout(resolve, remainingMs); })
+      ]);
+      if (timer) clearTimeout(timer);
+      if (expired()) {
+        controller.abort(new Error('objective wall-clock deadline reached'));
+        for (const spec of wave) {
+          if ([SPECIALIST_STATUS.RUNNING, SPECIALIST_STATUS.READY, SPECIALIST_STATUS.CREATED, SPECIALIST_STATUS.WAITING].includes(spec.status)) {
+            spec.status = SPECIALIST_STATUS.TIMED_OUT;
+            spec.error = 'objective wall-clock deadline reached';
+            spec.completedAt = new Date().toISOString();
+            spec.leaseReleasedAt = spec.completedAt;
+            spec.result ||= emptyResult('partial', { errors: [spec.error] });
+          }
+        }
+        this.engine.persist(objective);
+      }
     };
 
     while (remaining.some((s) => s.status === SPECIALIST_STATUS.CREATED || s.status === SPECIALIST_STATUS.READY || s.status === SPECIALIST_STATUS.WAITING)) {
-      if (objective.status === OBJECTIVE_STATUS.CANCELLED || objective.status === OBJECTIVE_STATUS.PAUSED) break;
+      if (objective.status === OBJECTIVE_STATUS.CANCELLED || objective.status === OBJECTIVE_STATUS.PAUSED || expired()) break;
       const ready = remaining.filter((s) => {
         if (s.status !== SPECIALIST_STATUS.CREATED && s.status !== SPECIALIST_STATUS.READY && s.status !== SPECIALIST_STATUS.WAITING) return false;
         return (s.inputRefs || []).every((id) => {
@@ -220,7 +252,7 @@ export class SwarmOrchestrator {
     let findings = this.keepOnTopic(arbitration.findings, objective);
     let criticResult = null;
     let repair = null;
-    if (shouldRunCritic(objective, decision) && objective.status !== OBJECTIVE_STATUS.CANCELLED) {
+    if (shouldRunCritic(objective, decision) && objective.status !== OBJECTIVE_STATUS.CANCELLED && !expired()) {
       let critic = specialists.find((s) => s.role === 'critic');
       if (!critic) {
         critic = createSpecialist({
@@ -270,7 +302,7 @@ export class SwarmOrchestrator {
         });
         if (!specialists.includes(repair)) specialists.push(repair);
         if (repair.status !== SPECIALIST_STATUS.COMPLETED && repair.status !== SPECIALIST_STATUS.PARTIAL) {
-          await this.runSpecialist(repair, objective, catalogue, input, byId);
+          await this.runSpecialist(repair, objective, catalogue, { ...input, signal: controller.signal, deadlineAt }, byId);
         }
         const repaired = repair.result?.findings || [];
         findings = this.keepOnTopic(arbitrate([...workerPackets, { specialistId: repair.specialistId, result: repair.result }]).findings, objective);
@@ -287,9 +319,15 @@ export class SwarmOrchestrator {
     }
 
     const synthesizer = specialists.find((s) => s.role === 'synthesizer');
-    if (synthesizer && synthesizer.status !== SPECIALIST_STATUS.COMPLETED && objective.status !== OBJECTIVE_STATUS.CANCELLED) {
+    if (synthesizer && synthesizer.status !== SPECIALIST_STATUS.COMPLETED && objective.status !== OBJECTIVE_STATUS.CANCELLED && !expired()) {
       synthesizer.task.inputs = { findings };
-      await this.runSpecialist(synthesizer, objective, catalogue, { ...input, findings }, byId);
+      await this.runSpecialist(synthesizer, objective, catalogue, { ...input, findings, signal: controller.signal, deadlineAt }, byId);
+    } else if (synthesizer && expired() && ![SPECIALIST_STATUS.COMPLETED, SPECIALIST_STATUS.PARTIAL].includes(synthesizer.status)) {
+      synthesizer.status = SPECIALIST_STATUS.CANCELLED;
+      synthesizer.error = 'bounded synthesis skipped at objective deadline';
+      synthesizer.completedAt = new Date().toISOString();
+      synthesizer.leaseReleasedAt = synthesizer.completedAt;
+      synthesizer.result ||= emptyResult('partial', { findings, errors: [synthesizer.error] });
     }
 
     const topN = Number(objective.context?.topN || 5);
@@ -327,10 +365,40 @@ export class SwarmOrchestrator {
       contacted: false
     };
     objective.contacted = false;
+    objective.queryTrace = specialists.flatMap((s) => (s.executions || []).map((e) => ({
+      objectiveId: objective.objectiveId,
+      specialistId: s.specialistId,
+      role: s.role,
+      query: e.query || s.scope?.query || s.slice || objective.rawRequest,
+      provider: e.provider || null,
+      capability: e.capability,
+      sourceUrl: e.sourceUrl || null,
+      sourceRole: e.sourceRole || null,
+      candidateCount: e.candidateCount ?? s.result?.findings?.length ?? 0,
+      acceptedCount: e.acceptedCount ?? s.result?.findings?.length ?? 0,
+      rejectedCount: e.rejectedCount ?? 0,
+      rejectionReasons: e.rejectionReasons || [],
+      error: e.error || null,
+      durationMs: e.durationMs || null
+    })));
+    if (expired()) {
+      objective.deadline.expired = true;
+      objective.deadline.finishedAt = new Date().toISOString();
+      for (const spec of specialists) {
+        if ([SPECIALIST_STATUS.RUNNING, SPECIALIST_STATUS.READY, SPECIALIST_STATUS.CREATED, SPECIALIST_STATUS.WAITING].includes(spec.status)) {
+          spec.status = SPECIALIST_STATUS.CANCELLED;
+          spec.error ||= 'cancelled after objective deadline';
+          spec.completedAt ||= new Date().toISOString();
+          spec.leaseReleasedAt ||= spec.completedAt;
+        }
+      }
+    }
     const failedCore = specialists.filter((s) => s.role === 'scout' && s.status === SPECIALIST_STATUS.FAILED);
     objective.status = objective.status === OBJECTIVE_STATUS.CANCELLED
       ? OBJECTIVE_STATUS.CANCELLED
-      : (failedCore.length && findings.length === 0 ? OBJECTIVE_STATUS.FAILED : OBJECTIVE_STATUS.COMPLETED);
+      : ((expired() && findings.length === 0) || (failedCore.length && findings.length === 0)
+        ? OBJECTIVE_STATUS.FAILED
+        : OBJECTIVE_STATUS.COMPLETED);
     if (objective.status === OBJECTIVE_STATUS.FAILED && !objective.error) {
       objective.error = failedCore.map((s) => s.error).filter(Boolean).join('; ');
     }
@@ -346,6 +414,7 @@ export class SwarmOrchestrator {
       contacted: false,
       durationMs: Date.now() - startedAt,
       wallClockMs: Date.now() - startedAt,
+      deadline: objective.deadline,
       specialistDurations: specialists.map((s) => ({
         specialistId: s.specialistId,
         role: s.role,
@@ -424,7 +493,7 @@ export class SwarmOrchestrator {
       return await this.engine.invokeNode(
         { capabilityId, approvalState: 'not-required', provider: null },
         input,
-        context
+        { ...context, signal: context.signal }
       );
     } catch (error) {
       return { success: false, error: error.message, result: null };
@@ -449,7 +518,9 @@ export class SwarmOrchestrator {
         ...Object.keys(this.engine.fabric?.healthOverlay?.() || {})
       ],
       healthOverlay: this.engine.fabric?.healthOverlay?.() || {},
-      allowFallback: true
+      allowFallback: true,
+      signal: input.signal,
+      deadlineAt: input.deadlineAt
     };
 
     const deps = (specialist.inputRefs || []).map((id) => byId.get(id)).filter(Boolean);
@@ -477,16 +548,17 @@ export class SwarmOrchestrator {
           maxOrganizations: specialist.scope?.findN || 5,
           objective: wrapUntrusted(objective.rawRequest)
         }, context);
-        specialist.executions.push({
-          capability: cap,
-          provider: invocation.provider,
-          status: invocation.success === false ? 'failed' : 'ok',
-          error: invocation.error || null,
-          cost: invocation.cost || 0
-        });
-        objective.cost = (objective.cost || 0) + (invocation.cost || 0);
+        if (input.signal?.aborted || (input.deadlineAt && Date.now() >= input.deadlineAt)) {
+          specialist.status = SPECIALIST_STATUS.TIMED_OUT;
+          specialist.error = 'objective wall-clock deadline reached';
+          specialist.completedAt = new Date().toISOString();
+          specialist.leaseReleasedAt = specialist.completedAt;
+          specialist.result = emptyResult('partial', { errors: [specialist.error] });
+          return;
+        }
+        const rawFindings = invocation.result?.prospects || invocation.result?.organizations || [];
         const intent = discoveryIntent(query, objective.rawRequest);
-        const findings = (invocation.result?.prospects || invocation.result?.organizations || []).map((p) => ({
+        const findings = rawFindings.map((p) => ({
           ...p,
           slice: specialist.slice
         })).filter((p) => {
@@ -496,6 +568,18 @@ export class SwarmOrchestrator {
           if (!onTopic(item, objective.rawRequest, intent) && !onTopic(item, query, intent)) return false;
           return looksLikeCompany(item) || Boolean(p.domain && p.organizationName);
         });
+        specialist.executions.push({
+          capability: cap,
+          provider: invocation.provider,
+          status: invocation.success === false ? 'failed' : 'ok',
+          error: invocation.error || null,
+          cost: invocation.cost || 0,
+          query,
+          candidateCount: rawFindings.length,
+          acceptedCount: findings.length,
+          rejectedCount: Math.max(0, rawFindings.length - findings.length)
+        });
+        objective.cost = (objective.cost || 0) + (invocation.cost || 0);
         specialist.result = emptyResult(findings.length ? 'ok' : 'partial', {
           findings,
           evidence: findings.map((p) => ({ name: p.organizationName, website: p.website, source: cap })),

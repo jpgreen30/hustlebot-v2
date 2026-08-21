@@ -53,6 +53,11 @@ export function recoveryAction(node, observation, { catalogue = [], retries = 0,
 }
 
 export function applyReplan(plan, changes = {}) {
+  const originalClass = plan.objectiveClass || plan.pattern || null;
+  const requestedClass = changes.objectiveClass || originalClass;
+  if (originalClass && requestedClass && originalClass !== requestedClass && changes.strongClassEvidence !== true) {
+    changes = { ...changes, objectiveClass: originalClass, classChangeRefused: true };
+  }
   const next = {
     ...plan,
     planId: plan.planId,
@@ -60,6 +65,13 @@ export function applyReplan(plan, changes = {}) {
     revisionId: newPlanId(),
     revisedAt: new Date().toISOString(),
     revisionReason: changes.reason || 'recovery',
+    objectiveClass: changes.objectiveClass || originalClass,
+    repairSafety: {
+      originalPlaybook: originalClass,
+      repairPlaybook: changes.objectiveClass || originalClass,
+      reason: changes.reason || 'recovery',
+      classChangeRefused: changes.classChangeRefused === true
+    },
     nodes: (plan.nodes || []).map((node) => {
       if (changes.nodeId && node.id !== changes.nodeId) return node;
       return {

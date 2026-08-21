@@ -27,6 +27,22 @@ export const SOURCE_KIND = {
   DOCUMENT: 'DOCUMENT'
 };
 
+// Roles describe how a page may be used. They are intentionally independent
+// from source kind: a directory can be a discovery source and evidence source,
+// while never being allowed to occupy an entity slot.
+export const SOURCE_ROLE = {
+  ENTITY_SOURCE: 'ENTITY_SOURCE',
+  DISCOVERY_SOURCE: 'DISCOVERY_SOURCE',
+  EVIDENCE_SOURCE: 'EVIDENCE_SOURCE',
+  FIRST_PARTY_SOURCE: 'FIRST_PARTY_SOURCE',
+  AGGREGATOR: 'AGGREGATOR',
+  DIRECTORY: 'DIRECTORY',
+  LISTICLE: 'LISTICLE',
+  SEARCH_RESULT: 'SEARCH_RESULT',
+  UNTRUSTED: 'UNTRUSTED',
+  BLOCKED: 'BLOCKED'
+};
+
 export const SOURCE_STATUS = {
   DISCOVERED: 'DISCOVERED',
   EVALUATED: 'EVALUATED',

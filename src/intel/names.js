@@ -19,6 +19,8 @@ function sldOf(domain = '') {
 
 function cleanTitle(title = '') {
   return String(title || '')
+    .replace(/\bapp\s+app\b/ig, 'App')
+    .replace(/\s*[|\-–—:]\s*(app store|google play|official (site|website)|home)\s*$/i, '')
     .replace(/\s*[|\-–—:].*$/, '')
     .replace(/\s+/g, ' ')
     .trim();
@@ -33,7 +35,9 @@ export function preferredDisplayName(input = {}) {
     input.ogSiteName,
     input.ogTitle && cleanTitle(input.ogTitle),
     cleanTitle(input.title || ''),
-    input.officialName
+    input.officialName,
+    input.directoryName,
+    input.highConfidenceAlias
   ].filter(Boolean);
   for (const candidate of candidates) {
     const cc = compactAlnum(candidate);

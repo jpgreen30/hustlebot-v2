@@ -1002,7 +1002,8 @@ export class MacGyverEngine {
     const intelInspect = new Set([
       'know-about', 'sources-used', 'show-evidence', 'uncertain', 'conflicts', 'last-verified',
       'research-quality', 'why-searched', 'why-adapted', 'rejected-results', 'why-rejected',
-      'still-missing', 'best-source', 'first-party-only', 'inferred-claims', 'learned-strategy'
+      'still-missing', 'best-source', 'first-party-only', 'inferred-claims', 'learned-strategy',
+      'source-failed', 'fallback-source'
     ]);
     const intelAct = new Set(['why-ranked', 'research-deeper', 'another-source', 'verify-claim']);
     if (intelInspect.has(matched?.action)) {
